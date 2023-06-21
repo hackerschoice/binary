@@ -1,0 +1,17 @@
+All static compiled binaries are compiled with --enable-stealth and UPX packed when
+possible. Some command line options are not available in stealth mode:
+
+There is no -h, -m option (help & manpage) and -s (secret) is mandatory. 
+Otherwise gs-netcat will execute uname -a and exit immediately.
+
+Try any of this:
+
+./gs-netcat -s MySecret -il
+GSOCKET_SECRET='-s MySecret' ./gs-netcat -li
+GSOCKET_SECRET='-s MySecret -il' ./gs-netcat
+
+or start as a daemon in the backgroun with the fake process name 'cached':
+
+(bash -c "GSOCKET_ARGS='-s MySecret -il' exec -a cached ./gs-netcat" &)
+
+And clever people then rm -rf ./gs-netcat. 
