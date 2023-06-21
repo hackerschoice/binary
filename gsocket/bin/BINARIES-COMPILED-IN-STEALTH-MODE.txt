@@ -12,6 +12,6 @@ GSOCKET_SECRET='-s MySecret -il' ./gs-netcat
 
 or start as a daemon in the backgroun with the fake process name 'cached':
 
-(bash -c "GSOCKET_ARGS='-s MySecret -il' exec -a cached ./gs-netcat" &)
+(bash -c "GSOCKET_ARGS='-s MySecret -il' exec -a cached ./gs-netcat &>/dev/null" &)
 
 And clever people then rm -rf ./gs-netcat. 
