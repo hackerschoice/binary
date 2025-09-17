@@ -319,9 +319,9 @@ _bincrypter() {
         echo -e >&2 "${CDR}ERROR${CN}: $*"
         [ "$fn" = "-" ] && {
             cat    # Pass through
-            exit 0 # Make pipe succeed
+            return 0 # Make pipe succeed
         }
-        exit 255
+        return 255
     }
     _bc_ob64() {
         local i
@@ -411,16 +411,18 @@ _bincrypter() {
     }
     fn="-"
     [ "$#" -gt 0 ] && fn="$1" # $1 might be '-'
-    [ "$fn" != "-" ] && [ ! -f "$fn" ] && _bc_err "File not found: $fn"
-    [ -n "$BC_BCL_TEST_FAIL_COMMAND" ] && _bc_err "$BC_BCL_TEST_FAIL_COMMAND is required"
-    command -v openssl >/dev/null || _bc_err "openssl is required"
-    command -v perl >/dev/null || _bc_err "perl is required"
-    [ ! -c "/dev/urandom" ] && _bc_err "/dev/urandom is required"
+    [ "$fn" != "-" ] && [ ! -f "$fn" ] && { _bc_err "File not found: $fn"; return; }
+    [ "$fn" != "-" ] && [ ! -r "$fn" ] && { _bc_err "File not readable: $fn"; return; }
+    [ -n "$BC_BCL_TEST_FAIL_COMMAND" ] && { _bc_err "$BC_BCL_TEST_FAIL_COMMAND is required (fn=$fn)"; return; }
+    command -v openssl >/dev/null || { _bc_err "openssl is required"; return; }
+    command -v perl >/dev/null || { _bc_err "perl is required"; return; }
+    command -v gzip >/dev/null || { _bc_err "gzip is required"; return; }
+    [ ! -c "/dev/urandom" ] && { _bc_err "/dev/urandom is required"; return; }
     _PASSWORD="${2:-${PASSWORD:-$BC_PASSWORD}}"
     [ -n "$_BC_LOCK" ] && [ -n "$_PASSWORD" ] && { echo -e >&2 "${CDR}WARN${CN}: ${CDY}PASSWORD${CN} is ignored when using ${CDY}BC_LOCK${CN}."; unset _PASSWORD; }
     [ -z "$_PASSWORD" ] && P="$(DEBUG='' _bc_xdd 32 </dev/urandom | openssl base64 -A | _bc_xtr '^' '[:alnum:]' | DEBUG='' _bc_xdd 16)"
     _P="${_PASSWORD:-$P}"
-    [ -z "$_P" ] && _bc_err "No ${CDC}PASSWORD=<password>${CN} provided and failed to generate one."
+    [ -z "$_P" ] && { _bc_err "No ${CDC}PASSWORD=<password>${CN} provided and failed to generate one."; return; }
     unset _PASSWORD
     S="$(DEBUG='' _bc_xdd 32 </dev/urandom | openssl base64 -A | _bc_xtr '^' '[:alnum:]' | DEBUG='' _bc_xdd 16)"
     HOOK='Zm9yIHggaW4gb3BlbnNzbCBwZXJsIGd1bnppcDsgZG8KICAgIGNvbW1hbmQgLXYgIiR4IiA+L2Rldi9udWxsIHx8IHsgZWNobyA+JjIgIkVSUk9SOiBDb21tYW5kIG5vdCBmb3VuZDogJHgiOyByZXR1cm4gMjU1OyB9CmRvbmUKdW5zZXQgZm4gX2VycgppZiBbIC1uICIkWlNIX1ZFUlNJT04iIF07IHRoZW4KICAgIFsgIiRaU0hfRVZBTF9DT05URVhUIiAhPSAiJHtaU0hfRVZBTF9DT05URVhUJSI6ZmlsZToiKn0iIF0gJiYgZm49IiQwIgplbGlmIFsgLW4gIiRCQVNIX1ZFUlNJT04iIF07IHRoZW4KICAgIChyZXR1cm4gMCAyPi9kZXYvbnVsbCkgJiYgZm49IiR7QkFTSF9TT1VSQ0VbMF19IgpmaQpmbj0iJHtCQ19GTjotJGZufSIKWFM9IiR7QkFTSF9FWEVDVVRJT05fU1RSSU5HOi0kWlNIX0VYRUNVVElPTl9TVFJJTkd9IgpbIC16ICIkWFMiIF0gJiYgdW5zZXQgWFMKWyAteiAiJGZuIiBdICYmIFsgLXogIiRYUyIgXSAmJiBbICEgLWYgIiQwIiBdICYmIHsKICAgIGVjaG8gPiYyICdFUlJPUjogU2hlbGwgbm90IHN1cHBvcnRlZC4gVHJ5ICJCQ19GTj1GaWxlTmFtZSBzb3VyY2UgRmlsZU5hbWUiJwogICAgX2Vycj0xCn0KX2JjX2RlYygpIHsKICAgIF9QPSIke1BBU1NXT1JEOi0kQkNfUEFTU1dPUkR9IgogICAgdW5zZXQgXyBQQVNTV09SRCAKICAgIGlmIFsgLW4gIiRQIiBdOyB0aGVuCiAgICAgICAgaWYgWyAtbiAiJEJDViIgXSAmJiBbIC1uICIkQkNMIiBdOyB0aGVuCiAgICAgICAgICAgIF9iY2xfZ2VuX3AgIiRQIiB8fCByZXR1cm4KICAgICAgICBlbHNlCiAgICAgICAgICAgIF9QPSIkKGVjaG8gIiRQInxvcGVuc3NsIGJhc2U2NCAtQSAtZCkiCiAgICAgICAgZmkKICAgIGVsc2UKICAgICAgICBbIC16ICIkX1AiIF0gJiYgewogICAgICAgICAgICBlY2hvID4mMiAtbiAiRW50ZXIgcGFzc3dvcmQ6ICIKICAgICAgICAgICAgcmVhZCAtciBfUAogICAgICAgIH0KICAgIGZpCiAgICBbIC1uICIkQyIgXSAmJiB7CiAgICAgICAgbG9jYWwgc3RyCiAgICAgICAgc3RyPSIkKGVjaG8gIiRDIiB8IG9wZW5zc2wgZW5jIC1kIC1hZXMtMjU2LWNiYyAtbWQgc2hhMjU2IC1ub3NhbHQgLWsgIkMtJHtTfS0ke19QfSIgLWEgLUEgMj4vZGV2L251bGwpIgogICAgICAgIHVuc2V0IEMKICAgICAgICBbIC16ICIkc3RyIiBdICYmIHsKICAgICAgICAgICAgWyAtbiAiJEJDTCIgXSAmJiBlY2hvID4mMiAiRVJST1I6IERlY3J5cHRpb24gZmFpbGVkLiIKICAgICAgICAgICAgcmV0dXJuIDI1NQogICAgICAgIH0KICAgICAgICBldmFsICIkc3RyIgogICAgICAgIHVuc2V0IHN0cgogICAgfQogICAgWyAtbiAiJFhTIiBdICYmIHsKICAgICAgICBleGVjIGJhc2ggLWMgIiQocHJpbnRmICVzICIkWFMiIHxMQU5HPUMgcGVybCAtZSAnPD47PD47cmVhZChTVERJTiwkXywxKTt3aGlsZSg8Pil7cy9CMy9cbi9nO3MvQjEvXHgwMC9nO3MvQjIvQi9nO3ByaW50fSd8b3BlbnNzbCBlbmMgLWQgLWFlcy0yNTYtY2JjIC1tZCBzaGEyNTYgLW5vc2FsdCAtayAiJHtTfS0ke19QfSIgMj4vZGV2L251bGx8TEFORz1DIHBlcmwgLWUgInJlYWQoU1RESU4sXCRfLCAke1I6LTB9KTtwcmludCg8PikifGd1bnppcCkiCiAgICB9CiAgICBbIC16ICIkZm4iIF0gJiYgWyAtZiAiJDAiIF0gJiYgewogICAgICAgIHpmPSdyZWFkKFNURElOLFwkXywxKTt3aGlsZSg8Pil7cy9CMy9cbi9nO3MvQjEvXFx4MDAvZztzL0IyL0IvZztwcmludH0nCiAgICAgICAgcHJnPSJwZXJsIC1lICc8Pjs8PjskemYnPCckezB9J3xvcGVuc3NsIGVuYyAtZCAtYWVzLTI1Ni1jYmMgLW1kIHNoYTI1NiAtbm9zYWx0IC1rICcke1N9LSR7X1B9JyAyPi9kZXYvbnVsbHxwZXJsIC1lICdyZWFkKFNURElOLFxcXCRfLCAke1I6LTB9KTtwcmludCg8PiknfGd1bnppcCIKICAgICAgICBMQU5HPUMgZXhlYyBwZXJsICctZSReRj0yNTU7Zm9yKDMxOSwyNzksMzg1LDQzMTQsNDM1NCl7KCRmPXN5c2NhbGwkXywkIiwwKT4wJiZsYXN0fTtvcGVuKCRvLCI+Jj0iLiRmKTtvcGVuKCRpLCInIiRwcmciJ3wiKTtwcmludCRvKDwkaT4pO2Nsb3NlKCRpKXx8ZXhpdCgkPy8yNTYpOyRFTlZ7IkxBTkcifT0iJyIkTEFORyInIjtleGVjeyIvcHJvYy8kJC9mZC8kZiJ9IiciJHswOi1weXRob24zfSInIixAQVJHVjtleGl0IDI1NScgLS0gIiRAIgogICAgfQogICAgWyAtZiAiJHtmbn0iIF0gJiYgewogICAgICAgIHVuc2V0IC1mIF9iY2xfZ2V0IF9iY2xfdmVyaWZ5IF9iY2xfdmVyaWZ5X2RlYwogICAgICAgIHVuc2V0IEJDTCBCQ1YgXyBQIF9lcnIKICAgICAgICBldmFsICJ1bnNldCBfUCBTIFIgZm47JChMQU5HPUMgcGVybCAtZSAnPD47PD47cmVhZChTVERJTiwkXywxKTt3aGlsZSg8Pil7cy9CMy9cbi9nO3MvQjEvXHgwMC9nO3MvQjIvQi9nO3ByaW50fSc8IiR7Zm59InxvcGVuc3NsIGVuYyAtZCAtYWVzLTI1Ni1jYmMgLW1kIHNoYTI1NiAtbm9zYWx0IC1rICIke1N9LSR7X1B9IiAyPi9kZXYvbnVsbHxMQU5HPUMgcGVybCAtZSAicmVhZChTVERJTixcJF8sICR7UjotMH0pO3ByaW50KDw+KSJ8Z3VuemlwKSIKICAgICAgICByZXR1cm4KICAgIH0KICAgIFsgLXogIiRmbiIgXSAmJiByZXR1cm4KICAgIGVjaG8gPiYyICJFUlJPUjogRmlsZSBub3QgZm91bmQ6ICRmbiIKICAgIF9lcnI9MQp9ClsgLXogIiRfZXJyIiBdICYmIF9iY19kZWMgIiRAIgp1bnNldCBmbgp1bnNldCAtZiBfYmNfZGVjCmlmIFsgLW4gIiRfZXJyIiBdOyB0aGVuCiAgICB1bnNldCBfZXJyCiAgICBmYWxzZQplbHNlCiAgICB0cnVlCmZpCg=='
@@ -437,7 +439,7 @@ _bincrypter() {
     str+="S='$S'"$'\n'
     ifn="$fn"
     [ "$fn" = "-" ] && ifn="/dev/stdin"
-    DATA="$(gzip <"$ifn" | openssl base64)" || exit
+    DATA="$(gzip <"$ifn" | openssl base64)" || return 255
     [ "$BC_PADDING" != "0" ] && {
         local sz="${#DATA}"
         [ "$sz" -lt 31337 ] && sz=31337
@@ -454,7 +456,7 @@ _bincrypter() {
     HOOK="$(_bc_ob64 "$HOOK")"
     [ -z "$_BC_QUIET" ] && [ "$fn" != "-" ] && { 
         s="$(stat -c %s "$fn")"
-        [ "$s" -gt 0 ] || _bc_err "Empty file: $fn"
+        [ "$s" -gt 0 ] || { _bc_err "Empty file: $fn"; return; }
     }
     [ "$fn" = "-" ] && fn="/dev/stdout"
     { 
@@ -473,6 +475,7 @@ _bincrypter() {
     }
     unset -f _bc_usage _bcl_get _bcl_verify _bcl_verify_dec _bc_err _bc_ob64 _bc_obbell _bc_xdd _bc_xtr _bc_xprintf
     [ -z "$_BC_QUIET" ] && echo -e >&2 "${CDG}Done${CN}"
+    return 0
 }
 declare -F _bincrypter >/dev/null || {
 	# Fallback to bincrypter binary (if installed; mostly for development)
